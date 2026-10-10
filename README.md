@@ -10,6 +10,7 @@ A real-time group chat app. The server is a small relay written in **Bonezegei S
 - Live "Online" list, updated whenever someone joins or leaves
 - Chat bubbles with sender name, timestamp and a colored initial avatar
 - Auto-reconnect: if the connection drops, the client retries and tells everyone it is back
+- Collapsible **Console** at the bottom left showing the raw `[System]`, `[Server]` and `[Client]` traffic, like the original lab UI (handy for debugging connections)
 - Responsive layout (the online list becomes a slide-in panel on phones)
 
 ## Project Structure

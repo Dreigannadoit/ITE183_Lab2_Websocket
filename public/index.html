@@ -322,6 +322,71 @@
             .logo { font-size: 44px; }
         }
 
+        /* ---------- connection console (bottom left) ---------- */
+        .console {
+            position: fixed;
+            left: 14px;
+            bottom: 14px;
+            z-index: 10;
+            width: min(430px, calc(100vw - 28px));
+            overflow: hidden;
+            background: var(--ink);
+            border: 3px solid var(--ink);
+            border-radius: 16px;
+            box-shadow: 0 6px 0 var(--ink);
+        }
+        .console-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 4px 8px 4px 4px;
+            background: var(--purple);
+            box-shadow: inset 0 3px 0 rgba(255, 255, 255, .3);
+        }
+        .console-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 10px;
+            font-family: var(--display);
+            font-size: 17px;
+            letter-spacing: .4px;
+            color: var(--white);
+            background: transparent;
+            border: 0;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+        .console-toggle .chev { display: inline-block; font-size: 12px; transition: transform .15s; }
+        .console.open .console-toggle .chev { transform: rotate(180deg); }
+        .console-clear {
+            font-family: var(--display);
+            font-size: 14px;
+            padding: 2px 12px 3px;
+            color: var(--ink);
+            background: var(--white);
+            border: 2px solid var(--ink);
+            border-radius: 999px;
+            cursor: pointer;
+        }
+        .console:not(.open) .console-clear { display: none; }
+        .console-body {
+            max-height: min(220px, 35dvh);
+            overflow-y: auto;
+            padding: 10px 12px;
+            font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #F4EFFF;
+        }
+        .console-body[hidden] { display: none; }
+        .console-body .cl { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .console-body .tag { font-weight: 800; }
+        .t-sys { color: var(--yellow); }
+        .t-srv { color: var(--green); }
+        .t-cli { color: var(--sky); }
+
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after { animation: none !important; transition: none !important; }
         }
@@ -388,6 +453,17 @@
         </form>
     </div>
 
+    <!-- ===================== CONSOLE ===================== -->
+    <aside id="console" class="console" aria-label="Connection console">
+        <div class="console-bar">
+            <button id="consoleToggle" class="console-toggle" type="button" aria-expanded="false" aria-controls="consoleBody">
+                <span class="chev" aria-hidden="true">&#9650;</span> Console
+            </button>
+            <button id="consoleClear" class="console-clear" type="button">Clear</button>
+        </div>
+        <div id="consoleBody" class="console-body" role="log" hidden></div>
+    </aside>
+
     <script>
         // ---------- connection ----------
         const wsUrl = location.protocol.indexOf("http") === 0
@@ -405,6 +481,40 @@
         const msgInput = $("msgInput"), sendBtn = $("sendBtn");
         const logEl = $("log"), usersEl = $("users"), countEl = $("count");
         const panel = $("panel"), whoBtn = $("whoBtn");
+        const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
+
+        // ---------- console (shows what travels over the socket) ----------
+        const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
+
+        function logLine(tag, text) {
+            const stick = consoleBody.scrollHeight - consoleBody.scrollTop - consoleBody.clientHeight < 40;
+            const line = document.createElement("span");
+            line.className = "cl";
+            const label = document.createElement("b");
+            label.className = "tag " + TAG_CLASS[tag];
+            label.textContent = "[" + tag + "]";
+            line.append(label, " " + text);
+            consoleBody.appendChild(line);
+            while (consoleBody.childElementCount > 200) consoleBody.firstElementChild.remove();
+            if (stick) consoleBody.scrollTop = consoleBody.scrollHeight;
+        }
+
+        // Keep the console just above the message box on the chat screen.
+        function placeConsole() {
+            const bar = $("chatForm");
+            const lift = chatScreen.classList.contains("active") ? bar.offsetHeight : 0;
+            consoleEl.style.bottom = (lift + 14) + "px";
+        }
+        window.addEventListener("resize", placeConsole);
+        if (window.ResizeObserver) new ResizeObserver(placeConsole).observe($("chatForm"));
+
+        consoleToggle.addEventListener("click", () => {
+            const open = consoleEl.classList.toggle("open");
+            consoleBody.hidden = !open;
+            consoleToggle.setAttribute("aria-expanded", open);
+            if (open) consoleBody.scrollTop = consoleBody.scrollHeight;
+        });
+        $("consoleClear").addEventListener("click", () => consoleBody.replaceChildren());
 
         // Every tab gets its own id, so two people can never be confused.
         const myId = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
@@ -439,6 +549,8 @@
         function sendRaw(text) {
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(text);
+                const m = parse(text);
+                logLine("Client", m.type === "MSG" ? m.payload : text);
                 return true;
             }
             return false;
@@ -464,11 +576,13 @@
 
         function connect() {
             setStatus("connecting");
+            logLine("System", "Connecting to " + wsUrl + " ...");
             socket = new WebSocket(wsUrl);
 
             socket.onopen = () => {
                 clearTimeout(retryTimer);
                 retryDelay = 1000;
+                logLine("System", "Handshake complete. WebSocket ready.");
                 setStatus("online");
                 if (joined) {
                     // Connection came back: tell everyone we're still here.
@@ -480,17 +594,23 @@
                 }
             };
 
-            socket.onmessage = (event) => handle(String(event.data));
+            socket.onmessage = (event) => {
+                const data = String(event.data);
+                const m = parse(data);
+                logLine("Server", m.type === "MSG" ? m.name + " says: " + m.payload : data);
+                handle(data);
+            };
 
             socket.onclose = () => {
                 if (claim) { clearTimeout(claim.timer); claim = null; }
                 setStatus("offline");
+                logLine("System", "Connection closed. Retrying in " + (retryDelay / 1000) + "s ...");
                 if (joined) addSystem("Connection lost. Trying to reconnect...");
                 retryTimer = setTimeout(connect, retryDelay);
                 retryDelay = Math.min(retryDelay * 2, 10000);
             };
 
-            socket.onerror = () => { /* onclose handles the retry */ };
+            socket.onerror = () => logLine("System", "Connection error.");
         }
 
         // ---------- protocol ----------
@@ -561,6 +681,7 @@
             myName = claim.name;
             claim = null;
             joined = true;
+            logLine("System", "Username accepted. Joined as " + myName + ".");
             resetPeers();
             showScreen("chat");
             setStatus(state);
@@ -591,6 +712,7 @@
         function showScreen(name) {
             joinScreen.classList.toggle("active", name === "join");
             chatScreen.classList.toggle("active", name === "chat");
+            placeConsole();
         }
 
         function colorFor(name) {
