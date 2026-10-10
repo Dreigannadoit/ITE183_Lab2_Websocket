@@ -44,8 +44,7 @@ message..." disabled />
             statusDiv.style.color = "#155724";
             msgInput.disabled = false;
             sendBtn.disabled = false;
-            appendLog("[System] Handshake complete.
-WebSocket ready.", "system");
+            appendLog("[System] Handshake complete. WebSocket ready.", "system");
 };
         socket.onmessage = function (event) {
             appendLog("[Server] " + event.data,
@@ -58,8 +57,7 @@ WebSocket ready.", "system");
             statusDiv.style.color = "#721c24";
             msgInput.disabled = true;
             sendBtn.disabled = true;
-            appendLog("[System] Connection closed by
-server.", "system");
+            appendLog("[System] Connection closed by server.", "system");
 };
 
         socket.onerror = function (error) {
