@@ -1,104 +1,103 @@
-# ITE183 Lab 2 – WebSocket Server
+# Chatterbox – Bonezegei WebSocket Chat (ITE183 Lab 2)
 
-A simple HTTP + WebSocket chat server written in **Bonezegei Script Language (`.bzg`)**, with a browser-based test client. Every message a client sends is broadcast to all connected clients.
+A real-time group chat app. The server is written in **Bonezegei Script Language (`.bzg`)** and serves a cartoon-style browser client with heavy outlines and a semi-3D look.
 
 ## Features
 
-- Serves a web page over HTTP on port `8000`
-- Accepts WebSocket connections on the same port (`ws://localhost:8000`)
-- Sends a welcome message to each client when it connects
-- Broadcasts every received message to all connected clients (`User <id> says: <message>`)
-- Logs connect, disconnect and message events to the console
-- Browser test client with live connection status, message input and message log
-- Custom `404` page for any unknown route
+- Username screen before chatting (2–16 characters, no `|` or `,`)
+- Server-side usernames, with duplicate names rejected
+- Join and leave announcements
+- Live "Online" list, updated whenever someone joins or leaves
+- Chat bubbles with sender name, timestamp and a colored initial avatar
+- Auto-reconnect: if the connection drops, the client retries and reclaims its username
+- Responsive layout (the online list becomes a slide-in panel on phones)
 
 ## Project Structure
 
 ```
 .
-├── app.bzg              # Main server script (HTTP routes + WebSocket handlers)
-├── package.json         # Project metadata and start script
+├── app.bzg              # Server: HTTP routes, usernames, WebSocket handlers
+├── package.json
 ├── lib/
 │   ├── http.bzg         # Loads the native http module
-│   ├── http.json        # Function/method reference for the http module
-│   └── http/
-│       └── http.dll     # Native HTTP/WebSocket library
+│   ├── http.json        # Method reference for the http module
+│   └── http/http.dll    # Native HTTP/WebSocket library
 ├── public/
-│   ├── index.html       # WebSocket test client
-│   └── 404.html         # Not-found page
+│   ├── index.html       # Chatterbox client (join screen + chat screen)
+│   └── 404.html
 └── README.md
 ```
 
 ## Requirements
 
 - Windows (the native module is a `.dll`)
-- The **Bonezegei** interpreter, available on your PATH as `bonezegei`
+- The **Bonezegei** interpreter, available as `bonezegei`
 - A modern web browser
 
 ## Getting Started
 
-1. Clone or extract the project and open a terminal in its root folder.
-2. Start the server:
+```bash
+bonezegei app.bzg     # or: npm start
+```
 
-   ```bash
-   bonezegei app.bzg
-   ```
+Open <http://localhost:8000>, pick a username and start chatting. Open a second tab or device on the same network (use the host machine's IP instead of `localhost`) to chat with yourself.
 
-   or, if you use npm:
+## Message Protocol
 
-   ```bash
-   npm start
-   ```
+Everything travels as plain text over one WebSocket.
 
-3. Open <http://localhost:8000> in your browser. The status bar should turn green and show **Connected**.
-4. Open the page in a second tab or window, then send a message from one – both will receive it.
+**Client → server**
 
-## How It Works
+| Message | Meaning |
+| ------- | ------- |
+| first message on a connection | the username the client wants |
+| any later message | a chat message |
 
-### HTTP
+**Server → client**
 
-| Route | Response |
-| ----- | -------- |
-| `/`   | `public/index.html` (test client) |
-| any other path | `public/404.html` |
+| Message | Meaning |
+| ------- | ------- |
+| `OK\|name` | username accepted |
+| `ERR\|reason` | username rejected (empty or taken) |
+| `SYS\|text` | join/leave notice |
+| `MSG\|name\|text` | chat message from `name` |
+| `USERS\|a,b,c` | everyone currently online |
 
-### WebSocket Events
+The server keeps one array, `names[clientId]`. An empty string means the client has connected but not joined yet.
 
-| Handler | Triggered when | Behavior |
-| ------- | -------------- | -------- |
-| `server.onConnect(clientId)` | A client connects | Logs the connection and sends a welcome message to that client |
-| `server.onData(message, clientId)` | A client sends a message | Logs it and broadcasts `User <clientId> says: <message>` to everyone |
-| `server.onDisconnect(clientId)` | A client disconnects | Logs the disconnection |
+## Server Handlers (`app.bzg`)
 
-## `http` Module API
+| Handler | Behavior |
+| ------- | -------- |
+| `server.get` | `/` serves `public/index.html`, anything else serves `public/404.html` |
+| `server.onConnect` | Marks the client as not joined |
+| `server.onData` | First message: validate and register the username, announce it, send the user list. After that: broadcast `MSG\|name\|text` |
+| `server.onDisconnect` | Frees the name, announces the leave, sends the updated user list |
 
-Provided by `lib/http.bzg` and documented in `lib/http.json`.
+## Design
 
-| Method | Description |
-| ------ | ----------- |
-| `http(port)` | Creates a server object listening on `port` |
-| `get(path, data)` | HTTP GET callback |
-| `post(path, data)` | HTTP POST callback |
-| `sendResponse(message, type, code)` | Sends a response (e.g. `"text/html"`, `200`) |
-| `sendFile(filename)` | Sends a file to the client |
-| `onConnect(clientId)` | WebSocket connect callback |
-| `onData(data, clientId)` | WebSocket message callback |
-| `onDisconnect(clientId)` | WebSocket disconnect callback |
-| `send(clientId, message)` | Sends a message to one client |
-| `sendAll(message)` | Sends a message to all clients |
-| `run()` | Starts the server loop |
+Palette (defined as CSS variables at the top of `public/index.html`):
+
+| Role | Colors |
+| ---- | ------ |
+| Primary | Bubble Blue `#2D6BFF`, Sunny Yellow `#FFD23F` |
+| Secondary | Mint Green `#35D07F`, Bubblegum Pink `#FF6FA5`, Sky Cyan `#5CCBFF` |
+| Complementary | Orange `#FF8A2B` (opposite blue), Purple `#8B5CF6` (opposite yellow) |
+| Neutrals | Ink `#1B1230`, Paper `#FFF6DF`, White |
+
+Fonts are Lilita One (headings) and Nunito (text), loaded from Google Fonts. Offline, the page falls back to system rounded fonts.
 
 ## Customization
 
-- **Change the port:** edit `http(8000)` in `app.bzg` and update `wsUrl` in `public/index.html` to match.
-- **Echo instead of broadcast:** in `server.onData`, use `server.send(clientId, "Echo: " + message);` instead of `server.sendAll(...)`.
-- **Add a page:** add another `else if(path == "/yourpath")` branch in `server.get` and serve a new file from `public/`.
+- **Change the port:** edit `http(8000)` in `app.bzg`. The client uses the page's own host and port, so it follows automatically.
+- **Raise the user limit:** change `MAX_CLIENTS` (default 64) in `app.bzg`.
+- **Recolor the app:** edit the variables in `:root` in `public/index.html`.
 
 ## Troubleshooting
 
-- **Status stays "Disconnected":** make sure the server is running and the port in `wsUrl` matches the server's port.
-- **Port already in use:** close the other program using port `8000`, or change the port as described above.
-- **`bonezegei` not recognized:** install the interpreter and add it to your PATH.
+- **Status shows Offline:** make sure the server is running. The client retries every 2 seconds.
+- **"That username is taken":** another connection is using that exact name (case-sensitive).
+- **Port already in use:** close the other program or change the port.
 
 ## License
 

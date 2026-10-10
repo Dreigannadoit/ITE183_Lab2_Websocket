@@ -2,11 +2,53 @@ include("lib/http.bzg");
 var server = http(8000);
 
 // ==========================================
+// CHAT STATE
+// ==========================================
+// names[clientId] holds the username of that client.
+// An empty string means the client connected but has not picked a name yet.
+var MAX_CLIENTS = 64;
+var names = [];
+var n = 0;
+while(n < MAX_CLIENTS){
+    names[n] = "";
+    n = n + 1;
+}
+
+// Returns 1 if another client already uses this username
+var nameTaken = function (name) {
+    var k = 0;
+    while(k < MAX_CLIENTS){
+        if(names[k] == name){
+            return 1;
+        }
+        k = k + 1;
+    }
+    return 0;
+};
+
+// Sends the list of joined usernames to everyone: USERS|alice,bob
+var broadcastUsers = function () {
+    var list = "";
+    var k = 0;
+    while(k < MAX_CLIENTS){
+        if(names[k] != ""){
+            if(list == ""){
+                list = names[k];
+            }
+            else{
+                list = list + "," + names[k];
+            }
+        }
+        k = k + 1;
+    }
+    server.sendAll("USERS|" + list);
+};
+
+// ==========================================
 // HTTP EVENT HANDLERS
 // ==========================================
 
 server.get = function (path, data){
-    //print("get loc:" + path + "data:"+ data);
     print("get loc:" + path );
 
     if(path == "/"){
@@ -20,29 +62,57 @@ server.get = function (path, data){
 // ==========================================
 // WEBSOCKET (WS) EVENT HANDLERS
 // ==========================================
+//
+// Messages the server sends to clients:
+//   OK|name           your username was accepted
+//   ERR|reason        your username was rejected
+//   SYS|text          join / leave notices
+//   MSG|name|text     a chat message
+//   USERS|a,b,c       everyone who is online
+//
+// Messages the client sends to the server:
+//   1st message      the username it wants
+//   any later one    a chat message
 
-// Triggered when a client successfully connects via wss://
 server.onConnect = function (clientId) {
     print("WebSocket connected! Client ID: " + clientId);
-    // Send a welcome message to this specific client
-    server.send(clientId, "Welcome toWebSocket server!");
+    names[clientId] = "";
 };
 
-// Triggered when a client sends a message
 server.onData = function (message, clientId) {
     print("Received from Client " + clientId + ": " + message);
-    // Echo the message back to the sender
-    //server.send(clientId, "Echo: " + message);
-    //server.send(clientId, message);
 
-    // Or broadcast it to everyone connected
-    server.sendAll("User " + clientId + " says: " + message);
+    // Not joined yet: this message is the username
+    if(names[clientId] == ""){
+        if(message == ""){
+            server.send(clientId, "ERR|Username can't be empty.");
+        }
+        else if(nameTaken(message) == 1){
+            server.send(clientId, "ERR|That username is taken. Try another one.");
+        }
+        else{
+            names[clientId] = message;
+            server.send(clientId, "OK|" + message);
+            server.sendAll("SYS|" + message + " joined the chat");
+            broadcastUsers();
+        }
+    }
+    // Already joined: broadcast the chat message with the sender's name
+    else{
+        server.sendAll("MSG|" + names[clientId] + "|" + message);
+    }
 };
 
-// Triggered when a client disconnects
 server.onDisconnect = function (clientId) {
     print("WebSocket disconnected! Client ID: " + clientId);
-};
 
+    var name = names[clientId];
+    names[clientId] = "";
+
+    if(name != ""){
+        server.sendAll("SYS|" + name + " left the chat");
+        broadcastUsers();
+    }
+};
 
 server.run();
