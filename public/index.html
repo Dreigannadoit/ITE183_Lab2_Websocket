@@ -178,69 +178,178 @@
         .join-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; }
         .join-actions .btn { flex: 1; }
 
-        /* ---------- CHAT SCREEN ---------- */
-        #chatScreen { flex-direction: column; }
+        /* ---------- CHAT SCREEN (Discord-style layout) ---------- */
+        #chatScreen { flex-direction: row; }
 
-        .topbar {
+        /* left: channels */
+        .channels {
             flex: none;
+            width: 264px;
             display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 10px 16px;
+            flex-direction: column;
             background: var(--yellow);
-            border-bottom: var(--line) solid var(--ink);
-            box-shadow: 0 5px 0 rgba(27, 18, 48, .25);
+            border-right: var(--line) solid var(--ink);
             z-index: 3;
         }
-        .topbar h1 {
+        .brand { flex: none; padding: 16px 18px 14px; border-bottom: var(--line) solid var(--ink); box-shadow: inset 0 -4px 0 rgba(255, 255, 255, .35); }
+        .brand h1 {
             margin: 0;
             font-family: var(--display);
             font-weight: 400;
-            font-size: 30px;
+            font-size: 32px;
             line-height: 1;
             color: var(--white);
             -webkit-text-stroke: 5px var(--ink);
             paint-order: stroke fill;
             text-shadow: 0 4px 0 var(--ink);
         }
-        .topbar .spacer { flex: 1; }
-        .who-btn { display: none; }
+        .chan-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 14px; }
+        .section { margin: 0 0 12px 6px; font-family: var(--display); font-weight: 400; font-size: 15px; letter-spacing: 1px; text-transform: uppercase; }
+        .channel-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+        .channel {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px 9px;
+            font-family: var(--body);
+            font-weight: 800;
+            font-size: 16px;
+            text-align: left;
+            color: var(--ink);
+            background: transparent;
+            border: 3px solid transparent;
+            border-radius: 14px;
+            cursor: pointer;
+        }
+        .channel .hash { font-family: var(--display); font-size: 20px; line-height: 1; opacity: .6; }
+        .channel .cname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .channel:hover { background: rgba(255, 255, 255, .6); border-color: var(--ink); }
+        .channel.unread .cname { font-weight: 800; }
+        .channel.unread:not(.active) .cname { text-decoration: underline; text-decoration-thickness: 3px; text-underline-offset: 4px; }
+        .channel .badge {
+            min-width: 24px;
+            padding: 0 7px 1px;
+            font-family: var(--display);
+            font-size: 14px;
+            line-height: 20px;
+            text-align: center;
+            color: var(--ink);
+            background: var(--pink);
+            border: 3px solid var(--ink);
+            border-radius: 999px;
+        }
+        .channel .badge[hidden] { display: none; }
+        .channel .udot { width: 12px; height: 12px; background: var(--white); border: 3px solid var(--ink); border-radius: 50%; }
+        .channel .udot[hidden] { display: none; }
+        .channel.active {
+            color: var(--white);
+            background: var(--blue);
+            border-color: var(--ink);
+            box-shadow: 0 5px 0 var(--ink), inset 0 3px 0 rgba(255, 255, 255, .3);
+        }
+        .channel.active .hash { opacity: 1; }
 
-        .body { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 260px; }
+        .usercard {
+            flex: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0 12px 14px;
+            padding: 8px 12px 8px 8px;
+            background: var(--white);
+            border: 3px solid var(--ink);
+            border-radius: 18px;
+            box-shadow: 0 5px 0 var(--ink);
+        }
+        .usercard .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .usercard .who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
+        .usercard .pill { align-self: flex-start; font-size: 12px; padding: 0 9px 0 5px; }
+        .usercard .dot { width: 11px; height: 11px; border-width: 2px; }
+
+        /* middle: chat */
+        .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+        .chanbar {
+            flex: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            background: var(--white);
+            border-bottom: var(--line) solid var(--ink);
+            box-shadow: 0 5px 0 rgba(27, 18, 48, .2);
+            z-index: 2;
+        }
+        .chanbar h2 { margin: 0; font-family: var(--display); font-weight: 400; font-size: 26px; line-height: 1; }
+        .chanbar .hash { font-family: var(--display); font-size: 30px; line-height: 1; color: var(--purple); }
+        .chanbar .topic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 12px; border-left: 3px solid var(--ink); font-size: 14px; color: #5b5273; }
+        .chanbar .spacer { flex: 1; }
+        .nav-btn { display: none; }
 
         .log {
+            flex: 1;
             min-height: 0;
             overflow-y: auto;
             padding: 20px 18px 28px;
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 0;
         }
 
-        .empty {
-            margin: auto;
-            max-width: 320px;
-            padding: 18px 20px;
-            text-align: center;
-            font-weight: 800;
+        .welcome {
+            margin: 0 0 8px;
+            padding: 18px 20px 20px;
             background: var(--white);
             border: 3px dashed var(--ink);
-            border-radius: 20px;
+            border-radius: 22px;
         }
+        .welcome .big {
+            display: grid;
+            place-items: center;
+            width: 56px;
+            height: 56px;
+            margin-bottom: 10px;
+            font-family: var(--display);
+            font-size: 34px;
+            color: var(--white);
+            background: var(--purple);
+            border: 3px solid var(--ink);
+            border-radius: 50%;
+            box-shadow: 0 4px 0 var(--ink), inset 0 -5px 0 rgba(27, 18, 48, .2);
+        }
+        .welcome h3 { margin: 0 0 4px; font-family: var(--display); font-weight: 400; font-size: 26px; }
+        .welcome p { margin: 0; font-weight: 700; color: #5b5273; }
 
-        .row { display: flex; align-items: flex-end; gap: 10px; animation: slide .18s ease-out both; }
+        .divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 6px; }
+        .divider::before, .divider::after { content: ""; flex: 1; height: 3px; background: var(--ink); border-radius: 3px; }
+        .divider span { padding: 2px 14px 3px; font-size: 13px; font-weight: 800; background: var(--white); border: 3px solid var(--ink); border-radius: 999px; box-shadow: 0 3px 0 var(--ink); }
+
+        .msg {
+            display: grid;
+            grid-template-columns: 40px minmax(0, 1fr);
+            column-gap: 14px;
+            padding: 3px 8px;
+            margin: 0 -8px;
+            border-radius: 16px;
+            animation: slide .18s ease-out both;
+        }
         @keyframes slide { from { transform: translateY(8px) scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
-        .row.mine { flex-direction: row-reverse; }
+        .msg.head { margin-top: 14px; }
+        .msg.cont { margin-top: 2px; }
+        .msg.mention { background: rgba(255, 210, 63, .45); box-shadow: inset 5px 0 0 var(--orange); }
+        .gutter { position: relative; }
+        .gutter time { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font-size: 11px; color: #5b5273; opacity: 0; }
+        .msg.cont:hover .gutter time { opacity: 1; }
+        .content { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 
-        .stack { display: flex; flex-direction: column; gap: 6px; max-width: min(72%, 560px); }
-        .row.mine .stack { align-items: flex-end; }
-
-        .meta { display: flex; align-items: baseline; gap: 8px; padding: 0 6px; font-size: 14px; }
-        .meta b { font-family: var(--display); font-weight: 400; font-size: 17px; letter-spacing: .3px; }
+        .meta { display: flex; align-items: baseline; gap: 8px; padding: 0 4px; }
+        .meta b { font-family: var(--display); font-weight: 400; font-size: 18px; letter-spacing: .3px; }
         .meta time { font-size: 12px; color: #5b5273; }
 
         .bubble {
-            padding: 10px 16px 12px;
+            max-width: min(100%, 640px);
+            padding: 9px 15px 11px;
             font-weight: 700;
             line-height: 1.35;
             overflow-wrap: anywhere;
@@ -248,14 +357,28 @@
             color: var(--ink);
             background: var(--white);
             border: 3px solid var(--ink);
-            border-radius: 20px 20px 20px 5px;
+            border-radius: 18px 18px 18px 6px;
             box-shadow: 5px 5px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .08);
         }
-        .row.mine .bubble {
+        .msg.mine .bubble {
             color: var(--white);
             background: var(--blue);
-            border-radius: 20px 20px 5px 20px;
             box-shadow: 5px 5px 0 var(--ink), inset 0 -5px 0 rgba(0, 0, 40, .25), inset 0 4px 0 rgba(255, 255, 255, .25);
+        }
+        .mention-tag { padding: 0 6px 1px; font-weight: 800; color: var(--ink); background: var(--sky); border: 2px solid var(--ink); border-radius: 8px; }
+        .mention-tag.me { background: var(--yellow); }
+
+        .sys {
+            align-self: center;
+            margin: 10px 0 2px;
+            padding: 4px 14px 5px;
+            font-size: 14px;
+            font-weight: 800;
+            background: var(--white);
+            border: 3px solid var(--ink);
+            border-radius: 999px;
+            box-shadow: 0 4px 0 var(--ink);
+            animation: slide .18s ease-out both;
         }
 
         .typing {
@@ -263,7 +386,7 @@
             flex-direction: column;
             align-items: flex-start;
             gap: 8px;
-            margin-left: 50px; /* lines up with other people's bubbles */
+            margin: 14px 0 0 54px; /* lines up with message bubbles */
             animation: slide .18s ease-out both;
         }
         .typing[hidden] { display: none; }
@@ -274,7 +397,7 @@
             padding: 13px 18px;
             background: var(--white);
             border: 3px solid var(--ink);
-            border-radius: 20px 20px 20px 5px;
+            border-radius: 18px 18px 18px 6px;
             box-shadow: 5px 5px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .08);
         }
         .typing-bubble i {
@@ -293,41 +416,6 @@
         }
         .typing small { padding-left: 6px; font-size: 13px; font-weight: 800; color: #5b5273; }
 
-        .sys {
-            align-self: center;
-            padding: 4px 14px 5px;
-            font-size: 14px;
-            font-weight: 800;
-            background: var(--white);
-            border: 3px solid var(--ink);
-            border-radius: 999px;
-            box-shadow: 0 4px 0 var(--ink);
-        }
-
-        .panel {
-            min-height: 0;
-            overflow-y: auto;
-            padding: 18px;
-            background: var(--sky);
-            border-left: var(--line) solid var(--ink);
-        }
-        .panel h2 { margin: 0 0 16px; font-family: var(--display); font-weight: 400; font-size: 24px; }
-        .panel ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
-        .panel li {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 6px 12px 6px 6px;
-            font-weight: 800;
-            background: var(--white);
-            border: 3px solid var(--ink);
-            border-radius: 999px;
-            box-shadow: 0 4px 0 var(--ink);
-            overflow-wrap: anywhere;
-        }
-        .panel li .avatar { width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
-        .you { margin-left: auto; font-size: 12px; padding: 1px 8px; background: var(--yellow); border: 2px solid var(--ink); border-radius: 999px; }
-
         .composer {
             flex: none;
             display: flex;
@@ -337,24 +425,61 @@
             border-top: var(--line) solid var(--ink);
         }
 
-        /* ---------- small screens ---------- */
-        @media (max-width: 760px) {
-            .body { grid-template-columns: 1fr; }
-            .who-btn { display: inline-block; }
-            .panel {
-                position: absolute;
+        /* right: members */
+        .panel {
+            flex: none;
+            width: 250px;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 18px;
+            background: var(--sky);
+            border-left: var(--line) solid var(--ink);
+            z-index: 3;
+        }
+        .panel h2 { margin: 0 0 16px 4px; font-family: var(--display); font-weight: 400; font-size: 22px; }
+        .panel ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+        .member {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 12px 6px 6px;
+            font: inherit;
+            font-weight: 800;
+            text-align: left;
+            color: var(--ink);
+            background: var(--white);
+            border: 3px solid var(--ink);
+            border-radius: 999px;
+            box-shadow: 0 4px 0 var(--ink);
+            overflow-wrap: anywhere;
+            cursor: pointer;
+        }
+        .member:hover { transform: translateY(-2px); box-shadow: 0 6px 0 var(--ink); }
+        .member:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--ink); }
+        .member .avatar { width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
+        .you { margin-left: auto; font-size: 12px; padding: 1px 8px; background: var(--yellow); border: 2px solid var(--ink); border-radius: 999px; }
+
+        .scrim { display: none; }
+
+        /* ---------- small screens: side columns become drawers ---------- */
+        @media (max-width: 900px) {
+            .nav-btn { display: inline-block; }
+            .chanbar .topic { display: none; }
+            .channels, .panel {
+                position: fixed;
                 top: 0;
-                right: 0;
                 bottom: 0;
-                width: min(280px, 82%);
-                transform: translateX(110%);
+                width: min(290px, 84vw);
+                z-index: 20;
                 transition: transform .2s ease-out;
-                z-index: 2;
             }
-            .panel.open { transform: none; box-shadow: -8px 0 0 rgba(27, 18, 48, .25); }
-            .stack { max-width: 80%; }
-            .topbar h1 { font-size: 24px; }
+            .channels { left: 0; transform: translateX(-110%); }
+            .panel { right: 0; transform: translateX(110%); }
+            .channels.open, .panel.open { transform: none; }
+            .scrim.show { display: block; position: fixed; inset: 0; z-index: 15; background: rgba(27, 18, 48, .45); }
             .logo { font-size: 44px; }
+            .chanbar h2 { font-size: 22px; }
         }
 
         /* ---------- connection console (bottom left) ---------- */
@@ -480,32 +605,55 @@
 
     <!-- ===================== CHAT ===================== -->
     <div id="chatScreen" class="screen">
-        <header class="topbar">
-            <h1>Chatterbox</h1>
-            <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span class="txt">Connecting</span></span>
-            <span class="spacer"></span>
-            <button id="whoBtn" class="btn small who-btn" type="button" aria-expanded="false" aria-controls="panel">Who's here</button>
-        </header>
+        <nav id="channels" class="channels" aria-label="Channels">
+            <div class="brand"><h1>Chatterbox</h1></div>
+            <div class="chan-scroll">
+                <h2 class="section">Text channels</h2>
+                <ul id="channelList" class="channel-list"></ul>
+            </div>
+            <div class="usercard">
+                <div id="meAvatar" class="avatar"></div>
+                <div class="who">
+                    <b id="meName"></b>
+                    <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span class="txt">Connecting</span></span>
+                </div>
+            </div>
+        </nav>
 
-        <div class="body">
+        <section class="main">
+            <header class="chanbar">
+                <button id="chanBtn" class="btn small nav-btn" type="button" aria-expanded="false" aria-controls="channels">Channels</button>
+                <span class="hash" aria-hidden="true">#</span>
+                <h2 id="chanName">general</h2>
+                <span id="chanTopic" class="topic"></span>
+                <span class="spacer"></span>
+                <button id="whoBtn" class="btn small nav-btn" type="button" aria-expanded="false" aria-controls="panel">Who's here</button>
+            </header>
+
             <div id="log" class="log" role="log" aria-live="polite">
-                <div id="empty" class="empty">It's quiet in here. Say hi!</div>
+                <div id="welcome" class="welcome">
+                    <div class="big" aria-hidden="true">#</div>
+                    <h3 id="welcomeTitle"></h3>
+                    <p id="welcomeText"></p>
+                </div>
                 <div id="typing" class="typing" hidden>
                     <div class="typing-bubble" aria-hidden="true"><i></i><i></i><i></i></div>
                     <small id="typingText"></small>
                 </div>
             </div>
 
-            <aside id="panel" class="panel" aria-label="People online">
-                <h2>Online (<span id="count">0</span>)</h2>
-                <ul id="users"></ul>
-            </aside>
-        </div>
+            <form id="chatForm" class="composer" autocomplete="off">
+                <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Message #general" maxlength="300" disabled>
+                <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
+            </form>
+        </section>
 
-        <form id="chatForm" class="composer" autocomplete="off">
-            <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Type a message" maxlength="300" disabled>
-            <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
-        </form>
+        <aside id="panel" class="panel" aria-label="People online">
+            <h2>Online (<span id="count">0</span>)</h2>
+            <ul id="users"></ul>
+        </aside>
+
+        <div id="scrim" class="scrim"></div>
     </div>
 
     <!-- ===================== CONSOLE ===================== -->
@@ -535,13 +683,25 @@
         const TYPING_REFRESH_MS = 2500; // how often we repeat "I'm typing"
         const TYPING_IDLE_MS = 3000;    // stop saying it after this much silence
         const TYPING_TTL_MS = 5000;     // hide someone's dots if we hear nothing for this long
+        const GROUP_MS = 5 * 60 * 1000; // messages from one person within 5 minutes are grouped
+
+        // The channels are fixed. Add or rename them here.
+        const CHANNELS = [
+            { id: "general", topic: "Say hi and hang out" },
+            { id: "random", topic: "Anything goes" },
+            { id: "help", topic: "Stuck on something? Ask here" },
+            { id: "memes", topic: "Only the good stuff" }
+        ];
 
         const $ = (id) => document.getElementById(id);
         const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
         const nameInput = $("nameInput"), joinBtn = $("joinBtn"), joinError = $("joinError");
         const msgInput = $("msgInput"), sendBtn = $("sendBtn");
         const logEl = $("log"), usersEl = $("users"), countEl = $("count");
-        const panel = $("panel"), whoBtn = $("whoBtn");
+        const panel = $("panel"), whoBtn = $("whoBtn"), chanBtn = $("chanBtn");
+        const channelsEl = $("channels"), channelList = $("channelList"), scrim = $("scrim");
+        const chanNameEl = $("chanName"), chanTopicEl = $("chanTopic");
+        const welcomeEl = $("welcome"), welcomeTitle = $("welcomeTitle"), welcomeText = $("welcomeText");
         const typingEl = $("typing"), typingText = $("typingText");
         const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 
@@ -579,7 +739,12 @@
         function placeConsole() {
             if (userPlaced) { clampConsole(); return; }
             const bar = $("chatForm");
-            const lift = chatScreen.classList.contains("active") ? bar.offsetHeight : 0;
+            const chatOn = chatScreen.classList.contains("active");
+            const lift = chatOn ? bar.offsetHeight : 0;
+            // On wide screens, start just right of the channel column.
+            const wide = window.matchMedia ? window.matchMedia("(min-width: 901px)").matches : false;
+            const side = chatOn && wide ? channelsEl.offsetWidth : 0;
+            consoleEl.style.left = (side + 14) + "px";
             consoleEl.style.bottom = (lift + 14) + "px";
         }
         window.addEventListener("resize", placeConsole);
@@ -694,10 +859,17 @@
         let myName = "";
         let claim = null;            // { name, timer } while we wait to see if a name is free
         const peers = new Map();     // id -> { name, seen }
-        const typers = new Map();    // id -> { name, timer }  (people typing right now)
+        const typers = new Map();    // id -> { name, ch, timer }  (people typing right now)
         let iAmTyping = false;
+        let typingChannel = "general";
         let typingSentAt = 0;
         let typingIdleTimer = null;
+
+        // Channel state. Every browser receives every message and keeps its own copy.
+        const store = {};            // channel id -> { items: [], unread: 0, mentions: 0 }
+        const drafts = {};           // channel id -> unsent text in the message box
+        let current = "general";
+        CHANNELS.forEach((c) => { store[c.id] = { items: [], unread: 0, mentions: 0 }; drafts[c.id] = ""; });
 
         const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 
@@ -717,19 +889,27 @@
             sendBtn.disabled = !(online && joined);
         }
 
+        // Every packet looks like  TYPE|id|name|payload
+        // For MSG the payload is  channel|text   and for TYPING it is  channel|1  or  channel|0
+        function sendPacket(type, id, name, payload) {
+            return sendRaw(type + "|" + id + "|" + name + "|" + (payload || ""));
+        }
+
         function sendRaw(text) {
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(text);
                 const m = parse(text);
-                if (QUIET_TYPES.indexOf(m.type) < 0) logLine("Client", m.type === "MSG" ? m.payload : text);
+                if (QUIET_TYPES.indexOf(m.type) < 0) {
+                    if (m.type === "MSG") {
+                        const msg = splitPayload(m.payload);
+                        logLine("Client", "#" + msg.ch + " " + msg.text);
+                    } else {
+                        logLine("Client", text);
+                    }
+                }
                 return true;
             }
             return false;
-        }
-
-        // Every packet looks like  TYPE|id|name|payload
-        function sendPacket(type, id, name, payload) {
-            return sendRaw(type + "|" + id + "|" + name + "|" + (payload || ""));
         }
 
         function parse(data) {
@@ -743,6 +923,17 @@
             }
             parts.push(rest);
             return { type: parts[0], id: parts[1], name: parts[2], payload: parts[3] };
+        }
+
+        // "random|hello"  ->  { ch: "random", text: "hello" }
+        // No known channel in front (older page)  ->  #general
+        function splitPayload(payload) {
+            const k = payload.indexOf("|");
+            if (k > 0) {
+                const ch = payload.slice(0, k);
+                if (store[ch]) return { ch, text: payload.slice(k + 1) };
+            }
+            return { ch: "general", text: payload };
         }
 
         function connect() {
@@ -759,7 +950,7 @@
                     // Connection came back: tell everyone we're still here.
                     resetPeers();
                     sendPacket("HELLO", myId, myName, "re");
-                    addSystem("Reconnected.");
+                    addSystem("Reconnected.", current);
                 } else {
                     nameInput.focus();
                 }
@@ -774,7 +965,14 @@
                 if (wrapped) data = wrapped[1];
 
                 const m = parse(data);
-                if (QUIET_TYPES.indexOf(m.type) < 0) logLine("Server", m.type === "MSG" ? m.name + " says: " + m.payload : data);
+                if (QUIET_TYPES.indexOf(m.type) < 0) {
+                    if (m.type === "MSG") {
+                        const msg = splitPayload(m.payload);
+                        logLine("Server", m.name + " says in #" + msg.ch + ": " + msg.text);
+                    } else {
+                        logLine("Server", data);
+                    }
+                }
 
                 if (PACKET_TYPES.indexOf(m.type) < 0) {
                     if (!warnedUnknown) {
@@ -792,7 +990,7 @@
                 clearAllTypers();
                 setStatus("offline");
                 logLine("System", "Connection closed. Retrying in " + (retryDelay / 1000) + "s ...");
-                if (joined) addSystem("Connection lost. Trying to reconnect...");
+                if (joined) addSystem("Connection lost. Trying to reconnect...", current);
                 retryTimer = setTimeout(connect, retryDelay);
                 retryDelay = Math.min(retryDelay * 2, 10000);
             };
@@ -822,22 +1020,26 @@
 
             if (m.type === "HELLO") {
                 addPeer(m.id, m.name);
-                if (m.payload !== "re") addSystem(m.name + " joined the chat");
+                if (m.payload !== "re") addSystem(m.name + " joined the chat", "general");
                 if (m.id !== myId) sendPacket("HERE", myId, myName, "");
             } else if (m.type === "HERE") {
                 addPeer(m.id, m.name);
             } else if (m.type === "TYPING") {
-                if (m.id !== myId) setTyper(m.id, m.name, m.payload === "1");
+                if (m.id !== myId) {
+                    const t = splitPayload(m.payload);
+                    setTyper(m.id, m.name, t.ch, t.text === "1");
+                }
             } else if (m.type === "BYE") {
                 clearTyper(m.id);
                 if (peers.delete(m.id)) {
                     renderUsers();
-                    addSystem(m.name + " left the chat");
+                    addSystem(m.name + " left the chat", "general");
                 }
             } else if (m.type === "MSG") {
+                const msg = splitPayload(m.payload);
                 clearTyper(m.id);
                 addPeer(m.id, m.name);
-                addMessage(m.id, m.name, m.payload);
+                receiveMessage(msg.ch, m.id, m.name, msg.text);
             }
         }
 
@@ -854,13 +1056,13 @@
             if (!known || known.name !== name) renderUsers();
         }
 
-        // ---------- typing indicator ----------
-        // What we send: TYPING|id|name|1 while typing, TYPING|id|name|0 when we stop.
+        // ---------- typing indicator (per channel) ----------
+        // What we send: TYPING|id|name|channel|1 while typing, channel|0 when we stop.
         function stopTyping() {
             clearTimeout(typingIdleTimer);
             if (iAmTyping) {
                 iAmTyping = false;
-                sendPacket("TYPING", myId, myName, "0");
+                sendPacket("TYPING", myId, myName, typingChannel + "|0");
             }
         }
 
@@ -873,10 +1075,12 @@
 
         msgInput.addEventListener("input", () => {
             if (!joined) return;
+            if (iAmTyping && typingChannel !== current) stopTyping();
             if (msgInput.value.trim() === "") { stopTyping(); return; }
             const now = Date.now();
             if (!iAmTyping || now - typingSentAt > TYPING_REFRESH_MS) {
-                sendPacket("TYPING", myId, myName, "1");
+                typingChannel = current;
+                sendPacket("TYPING", myId, myName, current + "|1");
                 typingSentAt = now;
                 iAmTyping = true;
             }
@@ -885,15 +1089,15 @@
         });
 
         // What we receive
-        function setTyper(id, name, on) {
+        function setTyper(id, name, ch, on) {
             const existed = typers.get(id);
             if (existed) clearTimeout(existed.timer);
             if (!on) {
                 if (existed) { typers.delete(id); renderTyping(); }
                 return;
             }
-            typers.set(id, { name, timer: setTimeout(() => clearTyper(id), TYPING_TTL_MS) });
-            if (!existed || existed.name !== name) renderTyping();
+            typers.set(id, { name, ch, timer: setTimeout(() => clearTyper(id), TYPING_TTL_MS) });
+            if (!existed || existed.name !== name || existed.ch !== ch) renderTyping();
         }
 
         function clearTyper(id) {
@@ -917,8 +1121,9 @@
             return "Several people are typing";
         }
 
+        // Only people typing in the channel you are looking at are shown.
         function renderTyping() {
-            const names = Array.from(typers.values()).map((t) => t.name);
+            const names = Array.from(typers.values()).filter((t) => t.ch === current).map((t) => t.name);
             if (names.length === 0) {
                 typingEl.hidden = true;
                 return;
@@ -949,6 +1154,9 @@
             claim = null;
             joined = true;
             logLine("System", "Username accepted. Joined as " + myName + ".");
+            $("meName").textContent = myName;
+            $("meAvatar").style.background = colorFor(myName);
+            $("meAvatar").textContent = myName.charAt(0).toUpperCase();
             resetPeers();
             showScreen("chat");
             setStatus(state);
@@ -964,7 +1172,7 @@
             peers.forEach((p, id) => {
                 if (id !== myId && now - p.seen > STALE_MS) {
                     peers.delete(id);
-                    addSystem(p.name + " left the chat");
+                    addSystem(p.name + " left the chat", "general");
                 }
             });
             renderUsers();
@@ -1000,45 +1208,237 @@
             return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120;
         }
 
-        function push(node, force) {
-            const stick = force || nearBottom();
-            const empty = $("empty");
-            if (empty) empty.remove();
-            logEl.insertBefore(node, typingEl); // the typing bubble always stays last
-            if (stick) logEl.scrollTop = logEl.scrollHeight;
+        // ---------- channels ----------
+        function buildChannelList() {
+            CHANNELS.forEach((c) => {
+                const li = document.createElement("li");
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "channel";
+                btn.dataset.ch = c.id;
+                const hash = document.createElement("span");
+                hash.className = "hash";
+                hash.textContent = "#";
+                const name = document.createElement("span");
+                name.className = "cname";
+                name.textContent = c.id;
+                const dot = document.createElement("span");
+                dot.className = "udot";
+                dot.hidden = true;
+                const badge = document.createElement("span");
+                badge.className = "badge";
+                badge.hidden = true;
+                btn.append(hash, name, dot, badge);
+                btn.addEventListener("click", () => switchChannel(c.id));
+                li.append(btn);
+                channelList.append(li);
+            });
         }
 
-        function addSystem(text) {
+        function updateBadges() {
+            channelList.querySelectorAll(".channel").forEach((btn) => {
+                const ch = btn.dataset.ch;
+                const box = store[ch];
+                const active = ch === current;
+                btn.classList.toggle("active", active);
+                btn.classList.toggle("unread", !active && box.unread > 0);
+                btn.querySelector(".udot").hidden = active || box.unread === 0 || box.mentions > 0;
+                const badge = btn.querySelector(".badge");
+                badge.hidden = active || box.mentions === 0;
+                badge.textContent = box.mentions;
+                if (active) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+                let label = "#" + ch;
+                if (!active && box.unread) label += ", " + box.unread + " unread";
+                if (!active && box.mentions) label += ", " + box.mentions + " mentions";
+                btn.setAttribute("aria-label", label);
+            });
+        }
+
+        function channelInfo(id) {
+            return CHANNELS.find((c) => c.id === id);
+        }
+
+        function renderChannelHeader() {
+            const info = channelInfo(current);
+            chanNameEl.textContent = current;
+            chanTopicEl.textContent = info.topic;
+            msgInput.placeholder = "Message #" + current;
+            welcomeTitle.textContent = "Welcome to #" + current;
+            welcomeText.textContent = "This is the start of the #" + current + " channel. " + info.topic + ".";
+        }
+
+        function renderChannel() {
+            const items = store[current].items;
+            const nodes = [];
+            items.forEach((item, i) => buildNodes(item, items[i - 1]).forEach((n) => nodes.push(n)));
+            logEl.replaceChildren(welcomeEl, ...nodes, typingEl);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function switchChannel(ch) {
+            if (ch === current) { closeDrawers(); return; }
+            stopTyping();                       // we were typing in the old channel
+            drafts[current] = msgInput.value;   // keep what was typed, per channel
+            current = ch;
+            msgInput.value = drafts[ch] || "";
+            store[ch].unread = 0;
+            store[ch].mentions = 0;
+            updateBadges();
+            renderChannelHeader();
+            renderChannel();
+            renderTyping();
+            closeDrawers();
+            if (!msgInput.disabled) msgInput.focus();
+        }
+
+        // ---------- messages ----------
+        const dayKey = (ts) => {
+            const d = new Date(ts);
+            return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+        };
+
+        function dayLabel(ts) {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            if (dayKey(ts) === dayKey(Date.now())) return "Today";
+            if (dayKey(ts) === dayKey(yesterday.getTime())) return "Yesterday";
+            return new Date(ts).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+        }
+
+        const timeLabel = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        function mentionsMe(text) {
+            const safe = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            return new RegExp("(^|[^\\w])@" + safe + "(?![\\w])", "i").test(text);
+        }
+
+        // Writes text into an element, turning @names of people who are online into tags.
+        function appendText(el, text) {
+            const names = Array.from(peers.values()).map((p) => p.name).sort((a, b) => b.length - a.length);
+            let buf = "";
+            let i = 0;
+            while (i < text.length) {
+                if (text[i] === "@" && (i === 0 || !/\w/.test(text[i - 1]))) {
+                    const hit = names.find((n) =>
+                        text.substr(i + 1, n.length).toLowerCase() === n.toLowerCase() &&
+                        !/\w/.test(text.charAt(i + 1 + n.length)));
+                    if (hit) {
+                        if (buf) { el.append(buf); buf = ""; }
+                        const tag = document.createElement("span");
+                        tag.className = "mention-tag" + (same(hit, myName) ? " me" : "");
+                        tag.textContent = text.substr(i, hit.length + 1);
+                        el.append(tag);
+                        i += hit.length + 1;
+                        continue;
+                    }
+                }
+                buf += text[i];
+                i++;
+            }
+            if (buf) el.append(buf);
+        }
+
+        function makeDivider(ts) {
+            const d = document.createElement("div");
+            d.className = "divider";
+            const label = document.createElement("span");
+            label.textContent = dayLabel(ts);
+            d.append(label);
+            return d;
+        }
+
+        function makeSystem(item) {
             const s = document.createElement("div");
             s.className = "sys";
-            s.textContent = text;
-            push(s, false);
+            s.textContent = item.text;
+            return s;
         }
 
-        function addMessage(id, name, text) {
-            const mine = id === myId;
-
+        function makeMessage(item, grouped) {
+            const mine = item.id === myId;
             const row = document.createElement("div");
-            row.className = "row" + (mine ? " mine" : "");
+            row.className = "msg " + (grouped ? "cont" : "head") + (mine ? " mine" : "") + (item.mention ? " mention" : "");
 
-            const stack = document.createElement("div");
-            stack.className = "stack";
+            const gutter = document.createElement("div");
+            gutter.className = "gutter";
+            const content = document.createElement("div");
+            content.className = "content";
 
-            const meta = document.createElement("div");
-            meta.className = "meta";
-            const who = document.createElement("b");
-            who.textContent = mine ? "You" : name;
-            const time = document.createElement("time");
-            time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-            meta.append(who, time);
+            if (grouped) {
+                const t = document.createElement("time");
+                t.textContent = timeLabel(item.ts);
+                gutter.append(t);
+            } else {
+                gutter.append(makeAvatar(item.name));
+                const meta = document.createElement("div");
+                meta.className = "meta";
+                const who = document.createElement("b");
+                who.textContent = item.name;
+                const time = document.createElement("time");
+                time.textContent = timeLabel(item.ts);
+                meta.append(who, time);
+                content.append(meta);
+            }
 
             const bubble = document.createElement("div");
             bubble.className = "bubble";
-            bubble.textContent = text;
+            appendText(bubble, item.text);
+            content.append(bubble);
 
-            stack.append(meta, bubble);
-            row.append(makeAvatar(name), stack);
-            push(row, mine);
+            row.append(gutter, content);
+            return row;
+        }
+
+        // One item can become several nodes: an optional date divider, then the item.
+        function buildNodes(item, prev) {
+            const nodes = [];
+            const newDay = !prev || dayKey(prev.ts) !== dayKey(item.ts);
+            if (newDay) nodes.push(makeDivider(item.ts));
+            if (item.kind === "sys") {
+                nodes.push(makeSystem(item));
+                return nodes;
+            }
+            const grouped = !newDay && prev.kind === "msg" && prev.id === item.id && item.ts - prev.ts < GROUP_MS;
+            nodes.push(makeMessage(item, grouped));
+            return nodes;
+        }
+
+        function addItem(ch, item) {
+            const box = store[ch];
+            const prev = box.items[box.items.length - 1];
+            box.items.push(item);
+            if (box.items.length > 500) {
+                box.items.splice(0, 100);
+                if (ch === current) renderChannel();
+                return;
+            }
+            if (ch !== current) return;
+            const stick = item.id === myId || nearBottom();
+            buildNodes(item, prev).forEach((n) => logEl.insertBefore(n, typingEl)); // typing bubble stays last
+            if (stick) logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function addSystem(text, ch) {
+            addItem(ch || "general", { kind: "sys", text, ts: Date.now() });
+        }
+
+        function receiveMessage(ch, id, name, text) {
+            const mine = id === myId;
+            const mention = !mine && mentionsMe(text);
+            addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention });
+            if (!mine && ch !== current) {
+                store[ch].unread++;
+                if (mention) store[ch].mentions++;
+                updateBadges();
+            }
+        }
+
+        // ---------- members ----------
+        function insertMention(name) {
+            const v = msgInput.value;
+            msgInput.value = v + (v && !/\s$/.test(v) ? " " : "") + "@" + name + " ";
+            msgInput.focus();
+            msgInput.dispatchEvent(new Event("input", { bubbles: true }));
         }
 
         function renderUsers() {
@@ -1047,18 +1447,59 @@
             usersEl.replaceChildren();
             list.forEach(([id, p]) => {
                 const li = document.createElement("li");
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "member";
                 const label = document.createElement("span");
                 label.textContent = p.name;
-                li.append(makeAvatar(p.name), label);
+                btn.append(makeAvatar(p.name), label);
                 if (id === myId) {
                     const tag = document.createElement("span");
                     tag.className = "you";
                     tag.textContent = "you";
-                    li.append(tag);
+                    btn.append(tag);
+                    btn.title = "That's you";
+                } else {
+                    btn.title = "Click to mention " + p.name;
+                    btn.addEventListener("click", () => { insertMention(p.name); closeDrawers(); });
                 }
+                li.append(btn);
                 usersEl.appendChild(li);
             });
         }
+
+        // ---------- drawers (small screens) ----------
+        function closeDrawers() {
+            channelsEl.classList.remove("open");
+            panel.classList.remove("open");
+            scrim.classList.remove("show");
+            chanBtn.setAttribute("aria-expanded", "false");
+            whoBtn.setAttribute("aria-expanded", "false");
+        }
+
+        function toggleDrawer(el, btn) {
+            const open = !el.classList.contains("open");
+            closeDrawers();
+            if (open) {
+                el.classList.add("open");
+                scrim.classList.add("show");
+                btn.setAttribute("aria-expanded", "true");
+            }
+        }
+
+        chanBtn.addEventListener("click", () => toggleDrawer(channelsEl, chanBtn));
+        whoBtn.addEventListener("click", () => toggleDrawer(panel, whoBtn));
+        scrim.addEventListener("click", closeDrawers);
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") closeDrawers();
+            // Alt + Up/Down jumps between channels
+            if (joined && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+                e.preventDefault();
+                const i = CHANNELS.findIndex((c) => c.id === current);
+                const next = CHANNELS[(i + (e.key === "ArrowDown" ? 1 : CHANNELS.length - 1)) % CHANNELS.length];
+                switchChannel(next.id);
+            }
+        });
 
         // ---------- events ----------
         $("joinForm").addEventListener("submit", (e) => {
@@ -1081,18 +1522,18 @@
             e.preventDefault();
             const text = msgInput.value.trim();
             if (!text || !joined) return;
-            if (sendPacket("MSG", myId, myName, text)) {
+            if (sendPacket("MSG", myId, myName, current + "|" + text)) {
                 msgInput.value = "";
+                drafts[current] = "";
                 cancelTyping();
             }
             msgInput.focus();
         });
 
-        whoBtn.addEventListener("click", () => {
-            const open = panel.classList.toggle("open");
-            whoBtn.setAttribute("aria-expanded", open);
-        });
-
+        buildChannelList();
+        renderChannelHeader();
+        updateBadges();
+        renderChannel();
         connect();
     </script>
 </body>
