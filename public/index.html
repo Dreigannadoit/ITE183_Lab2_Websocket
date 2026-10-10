@@ -351,7 +351,7 @@
             <form id="joinForm" autocomplete="off">
                 <label for="nameInput">Username</label>
                 <input id="nameInput" class="field" type="text" maxlength="16" placeholder="e.g. PixelPanda" disabled>
-                <p class="hint">2 to 16 characters. Don't use | or ,</p>
+                <p class="hint">2 to 16 characters. The | symbol is not allowed.</p>
                 <p id="joinError" class="error" role="alert" hidden></p>
 
                 <div class="join-actions">
@@ -383,7 +383,7 @@
         </div>
 
         <form id="chatForm" class="composer" autocomplete="off">
-            <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Type a message" maxlength="500" disabled>
+            <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Type a message" maxlength="300" disabled>
             <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
         </form>
     </div>
@@ -395,6 +395,9 @@
             : "ws://localhost:8000";
 
         const AVATAR_COLORS = ["#35D07F", "#FF6FA5", "#5CCBFF", "#FF8A2B", "#8B5CF6"];
+        const CLAIM_MS = 700;        // how long we wait for "taken" replies
+        const HEARTBEAT_MS = 20000;  // how often we say "still here"
+        const STALE_MS = 150000;     // forget people we haven't heard from
 
         const $ = (id) => document.getElementById(id);
         const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
@@ -403,23 +406,60 @@
         const logEl = $("log"), usersEl = $("users"), countEl = $("count");
         const panel = $("panel"), whoBtn = $("whoBtn");
 
-        let socket = null;
-        let myName = "";        // name the server accepted
-        let pendingName = "";   // name we asked for and are waiting on
-        let joined = false;
-        let retryTimer = null;
+        // Every tab gets its own id, so two people can never be confused.
+        const myId = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
 
-        function setStatus(state) {
+        let socket = null;
+        let retryTimer = null;
+        let retryDelay = 1000;
+        let state = "connecting";
+        let joined = false;
+        let myName = "";
+        let claim = null;            // { name, timer } while we wait to see if a name is free
+        const peers = new Map();     // id -> { name, seen }
+
+        const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+
+        function setStatus(next) {
+            state = next;
             const label = { online: "Connected", connecting: "Connecting", offline: "Offline" }[state];
             [$("joinStatus"), $("chatStatus")].forEach((el) => {
                 el.dataset.state = state;
                 el.querySelector(".txt").textContent = label;
             });
             const online = state === "online";
-            nameInput.disabled = !online;
-            joinBtn.disabled = !online;
+            const checking = claim !== null;
+            nameInput.disabled = !online || checking;
+            joinBtn.disabled = !online || checking;
+            joinBtn.textContent = checking ? "Checking..." : "Join chat";
             msgInput.disabled = !(online && joined);
             sendBtn.disabled = !(online && joined);
+        }
+
+        function sendRaw(text) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(text);
+                return true;
+            }
+            return false;
+        }
+
+        // Every packet looks like  TYPE|id|name|payload
+        function sendPacket(type, id, name, payload) {
+            return sendRaw(type + "|" + id + "|" + name + "|" + (payload || ""));
+        }
+
+        function parse(data) {
+            const parts = [];
+            let rest = data;
+            for (let i = 0; i < 3; i++) {
+                const k = rest.indexOf("|");
+                if (k < 0) { parts.push(rest); rest = ""; continue; }
+                parts.push(rest.slice(0, k));
+                rest = rest.slice(k + 1);
+            }
+            parts.push(rest);
+            return { type: parts[0], id: parts[1], name: parts[2], payload: parts[3] };
         }
 
         function connect() {
@@ -428,13 +468,13 @@
 
             socket.onopen = () => {
                 clearTimeout(retryTimer);
+                retryDelay = 1000;
                 setStatus("online");
-                if (joined || myName) {
-                    // connection dropped earlier: claim the same name again
-                    pendingName = myName;
-                    socket.send(myName);
-                    joined = false;
-                    setStatus("online");
+                if (joined) {
+                    // Connection came back: tell everyone we're still here.
+                    resetPeers();
+                    sendPacket("HELLO", myId, myName, "re");
+                    addSystem("Reconnected.");
                 } else {
                     nameInput.focus();
                 }
@@ -443,11 +483,11 @@
             socket.onmessage = (event) => handle(String(event.data));
 
             socket.onclose = () => {
-                const wasJoined = joined;
-                joined = false;
+                if (claim) { clearTimeout(claim.timer); claim = null; }
                 setStatus("offline");
-                if (wasJoined) addSystem("Connection lost. Trying to reconnect...");
-                retryTimer = setTimeout(connect, 2000);
+                if (joined) addSystem("Connection lost. Trying to reconnect...");
+                retryTimer = setTimeout(connect, retryDelay);
+                retryDelay = Math.min(retryDelay * 2, 10000);
             };
 
             socket.onerror = () => { /* onclose handles the retry */ };
@@ -455,37 +495,97 @@
 
         // ---------- protocol ----------
         function handle(data) {
-            const i = data.indexOf("|");
-            const type = i < 0 ? data : data.slice(0, i);
-            const rest = i < 0 ? "" : data.slice(i + 1);
+            const m = parse(data);
 
-            if (type === "OK") {
-                myName = rest;
-                joined = true;
-                joinError.hidden = true;
-                showScreen("chat");
-                setStatus("online");
-                msgInput.focus();
+            // Username checks work before we have joined.
+            if (m.type === "CLAIM") {
+                if (m.id === myId) return;
+                const owner = joined && same(m.name, myName);
+                // If two people claim the same name at once, the lower id wins.
+                const tie = claim && same(m.name, claim.name) && myId < m.id;
+                if (owner || tie) sendPacket("TAKEN", m.id, m.name, "");
                 return;
             }
-            if (type === "ERR") {
-                myName = "";
-                joined = false;
-                showScreen("join");
-                joinError.textContent = rest;
-                joinError.hidden = false;
-                nameInput.focus();
+            if (m.type === "TAKEN") {
+                if (claim && m.id === myId && same(m.name, claim.name)) failClaim();
                 return;
             }
-            if (!joined) return; // ignore broadcasts until we have a name
 
-            if (type === "SYS") addSystem(rest);
-            else if (type === "USERS") renderUsers(rest === "" ? [] : rest.split(","));
-            else if (type === "MSG") {
-                const j = rest.indexOf("|");
-                addMessage(rest.slice(0, j), rest.slice(j + 1));
+            if (!joined) return;
+
+            if (m.type === "HELLO") {
+                addPeer(m.id, m.name);
+                if (m.payload !== "re") addSystem(m.name + " joined the chat");
+                if (m.id !== myId) sendPacket("HERE", myId, myName, "");
+            } else if (m.type === "HERE") {
+                addPeer(m.id, m.name);
+            } else if (m.type === "BYE") {
+                if (peers.delete(m.id)) {
+                    renderUsers();
+                    addSystem(m.name + " left the chat");
+                }
+            } else if (m.type === "MSG") {
+                addPeer(m.id, m.name);
+                addMessage(m.id, m.name, m.payload);
             }
         }
+
+        function resetPeers() {
+            peers.clear();
+            peers.set(myId, { name: myName, seen: Date.now() });
+            renderUsers();
+        }
+
+        function addPeer(id, name) {
+            const known = peers.get(id);
+            peers.set(id, { name, seen: Date.now() });
+            if (!known || known.name !== name) renderUsers();
+        }
+
+        function startClaim(name) {
+            claim = { name, timer: setTimeout(finishClaim, CLAIM_MS) };
+            joinError.hidden = true;
+            setStatus(state);
+            sendPacket("CLAIM", myId, name, "");
+        }
+
+        function failClaim() {
+            clearTimeout(claim.timer);
+            claim = null;
+            setStatus(state);
+            showJoinError("That username is taken. Try another one.");
+        }
+
+        function finishClaim() {
+            if (!claim) return;
+            myName = claim.name;
+            claim = null;
+            joined = true;
+            resetPeers();
+            showScreen("chat");
+            setStatus(state);
+            sendPacket("HELLO", myId, myName, "");
+            msgInput.focus();
+        }
+
+        // Say "still here" now and then, and forget people who went quiet.
+        setInterval(() => {
+            if (!joined) return;
+            sendPacket("HERE", myId, myName, "");
+            const now = Date.now();
+            peers.forEach((p, id) => {
+                if (id !== myId && now - p.seen > STALE_MS) {
+                    peers.delete(id);
+                    addSystem(p.name + " left the chat");
+                }
+            });
+            renderUsers();
+        }, HEARTBEAT_MS);
+
+        // Best effort goodbye when the tab closes.
+        window.addEventListener("pagehide", () => {
+            if (joined) sendPacket("BYE", myId, myName, "");
+        });
 
         // ---------- UI helpers ----------
         function showScreen(name) {
@@ -526,8 +626,8 @@
             push(s, false);
         }
 
-        function addMessage(name, text) {
-            const mine = name === myName;
+        function addMessage(id, name, text) {
+            const mine = id === myId;
 
             const row = document.createElement("div");
             row.className = "row" + (mine ? " mine" : "");
@@ -552,16 +652,16 @@
             push(row, mine);
         }
 
-        function renderUsers(list) {
-            list.sort((a, b) => a.localeCompare(b));
+        function renderUsers() {
+            const list = Array.from(peers.entries()).sort((a, b) => a[1].name.localeCompare(b[1].name));
             countEl.textContent = list.length;
             usersEl.replaceChildren();
-            list.forEach((name) => {
+            list.forEach(([id, p]) => {
                 const li = document.createElement("li");
                 const label = document.createElement("span");
-                label.textContent = name;
-                li.append(makeAvatar(name), label);
-                if (name === myName) {
+                label.textContent = p.name;
+                li.append(makeAvatar(p.name), label);
+                if (id === myId) {
                     const tag = document.createElement("span");
                     tag.className = "you";
                     tag.textContent = "you";
@@ -574,13 +674,12 @@
         // ---------- events ----------
         $("joinForm").addEventListener("submit", (e) => {
             e.preventDefault();
+            if (claim) return;
             const name = nameInput.value.trim();
             if (name.length < 2) return showJoinError("Username needs at least 2 characters.");
-            if (/[|,]/.test(name)) return showJoinError("Usernames can't contain | or ,");
-            if (!socket || socket.readyState !== WebSocket.OPEN) return showJoinError("Not connected yet. Wait for the green dot.");
-            joinError.hidden = true;
-            pendingName = name;
-            socket.send(name);
+            if (name.indexOf("|") >= 0) return showJoinError("Usernames can't contain |");
+            if (state !== "online") return showJoinError("Not connected yet. Wait for the green dot.");
+            startClaim(name);
         });
 
         function showJoinError(text) {
@@ -592,9 +691,10 @@
         $("chatForm").addEventListener("submit", (e) => {
             e.preventDefault();
             const text = msgInput.value.trim();
-            if (!text || !joined || socket.readyState !== WebSocket.OPEN) return;
-            socket.send(text);
-            msgInput.value = "";
+            if (!text || !joined) return;
+            if (sendPacket("MSG", myId, myName, text)) {
+                msgInput.value = "";
+            }
             msgInput.focus();
         });
 
