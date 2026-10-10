@@ -344,7 +344,23 @@
             background: var(--purple);
             box-shadow: inset 0 3px 0 rgba(255, 255, 255, .3);
         }
+        .console-bar { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+        .console.dragging { box-shadow: 0 10px 0 var(--ink); }
+        .console.dragging .console-bar { cursor: grabbing; }
+        .console-grip {
+            flex: none;
+            width: 18px;
+            height: 24px;
+            margin-left: 6px;
+            border-radius: 6px;
+            background-image: radial-gradient(var(--white) 2px, transparent 2.5px);
+            background-size: 6px 8px;
+            background-position: 2px 1px;
+            opacity: .9;
+        }
         .console-toggle {
+            flex: 1;
+            justify-content: flex-start;
             display: inline-flex;
             align-items: center;
             gap: 8px;
@@ -456,6 +472,9 @@
     <!-- ===================== CONSOLE ===================== -->
     <aside id="console" class="console" aria-label="Connection console">
         <div class="console-bar">
+            <span id="consoleGrip" class="console-grip" role="button" tabindex="0"
+                aria-label="Move console. Drag it, or use the arrow keys. Press Escape to reset."
+                title="Drag to move. Double-click to reset."></span>
             <button id="consoleToggle" class="console-toggle" type="button" aria-expanded="false" aria-controls="consoleBody">
                 <span class="chev" aria-hidden="true">&#9650;</span> Console
             </button>
@@ -505,8 +524,16 @@
             if (stick) consoleBody.scrollTop = consoleBody.scrollHeight;
         }
 
-        // Keep the console just above the message box on the chat screen.
+        // Position state (declared before placeConsole uses it)
+        const POS_KEY = "chatterbox.console";
+        let userPlaced = false;   // true once the console has been dragged somewhere
+        let drag = null;
+        let suppressClick = false;
+
+        // Keep the console just above the message box on the chat screen,
+        // unless the user has moved it somewhere else.
         function placeConsole() {
+            if (userPlaced) { clampConsole(); return; }
             const bar = $("chatForm");
             const lift = chatScreen.classList.contains("active") ? bar.offsetHeight : 0;
             consoleEl.style.bottom = (lift + 14) + "px";
@@ -515,12 +542,102 @@
         if (window.ResizeObserver) new ResizeObserver(placeConsole).observe($("chatForm"));
 
         consoleToggle.addEventListener("click", () => {
+            if (suppressClick) return; // this click was the end of a drag
             const open = consoleEl.classList.toggle("open");
             consoleBody.hidden = !open;
             consoleToggle.setAttribute("aria-expanded", open);
             if (open) consoleBody.scrollTop = consoleBody.scrollHeight;
+            if (userPlaced) clampConsole(); // opening makes it taller: keep it on screen
         });
         $("consoleClear").addEventListener("click", () => consoleBody.replaceChildren());
+
+        // ---------- draggable console ----------
+        const consoleBar = consoleEl.querySelector(".console-bar");
+        const consoleGrip = $("consoleGrip");
+
+        // Keep the whole window inside the browser window.
+        function clampConsole() {
+            const r = consoleEl.getBoundingClientRect();
+            const left = Math.min(Math.max(0, r.left), Math.max(0, window.innerWidth - r.width));
+            const top = Math.min(Math.max(0, r.top), Math.max(0, window.innerHeight - r.height));
+            consoleEl.style.left = left + "px";
+            consoleEl.style.top = top + "px";
+        }
+
+        function setConsolePos(left, top) {
+            userPlaced = true;
+            consoleEl.style.left = left + "px";
+            consoleEl.style.top = top + "px";
+            consoleEl.style.bottom = "auto";
+            clampConsole();
+        }
+
+        function savePos() {
+            try {
+                const r = consoleEl.getBoundingClientRect();
+                localStorage.setItem(POS_KEY, JSON.stringify({ left: r.left, top: r.top }));
+            } catch (err) { /* storage unavailable: position just won't be remembered */ }
+        }
+
+        function resetPos() {
+            userPlaced = false;
+            consoleEl.style.left = "";
+            consoleEl.style.top = "";
+            try { localStorage.removeItem(POS_KEY); } catch (err) { }
+            placeConsole();
+        }
+
+        function onDragMove(e) {
+            if (!drag) return;
+            if (!drag.moved) {
+                // ignore tiny wiggles so a normal click still toggles the console
+                if (Math.abs(e.clientX - drag.startX) < 4 && Math.abs(e.clientY - drag.startY) < 4) return;
+                drag.moved = true;
+                consoleEl.classList.add("dragging");
+            }
+            setConsolePos(e.clientX - drag.offX, e.clientY - drag.offY);
+        }
+
+        function onDragEnd() {
+            window.removeEventListener("pointermove", onDragMove);
+            window.removeEventListener("pointerup", onDragEnd);
+            window.removeEventListener("pointercancel", onDragEnd);
+            if (drag && drag.moved) {
+                consoleEl.classList.remove("dragging");
+                suppressClick = true;
+                setTimeout(() => { suppressClick = false; }, 80);
+                savePos();
+            }
+            drag = null;
+        }
+
+        consoleBar.addEventListener("pointerdown", (e) => {
+            if (e.button > 0 || e.target.closest("#consoleClear")) return;
+            const r = consoleEl.getBoundingClientRect();
+            drag = { offX: e.clientX - r.left, offY: e.clientY - r.top, startX: e.clientX, startY: e.clientY, moved: false };
+            window.addEventListener("pointermove", onDragMove);
+            window.addEventListener("pointerup", onDragEnd);
+            window.addEventListener("pointercancel", onDragEnd);
+        });
+
+        // Keyboard: arrow keys move it (Shift for bigger steps), Escape or double-click resets it.
+        consoleGrip.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" || e.key === "Home") { e.preventDefault(); resetPos(); return; }
+            const step = e.shiftKey ? 60 : 20;
+            const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+            if (!move) return;
+            e.preventDefault();
+            const r = consoleEl.getBoundingClientRect();
+            setConsolePos(r.left + move[0], r.top + move[1]);
+            savePos();
+        });
+        consoleGrip.addEventListener("dblclick", resetPos);
+
+        // Remember where it was last time.
+        try {
+            const saved = JSON.parse(localStorage.getItem(POS_KEY) || "null");
+            if (saved && isFinite(saved.left) && isFinite(saved.top)) setConsolePos(saved.left, saved.top);
+        } catch (err) { }
 
         // Every tab gets its own id, so two people can never be confused.
         const myId = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
