@@ -1,0 +1,13 @@
+{
+    "name": "ite183-lab2-websocket",
+    "version": "1.0.0",
+    "description": "Bonezegei WebSocket Server",
+    "main": "app.bzg",
+    "scripts": {
+        "start": "bonezegei app.bzg"
+    },
+    "dependencies": {
+        "http": "^1.0.0"
+    },
+    "license": "MIT"
+}
