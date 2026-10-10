@@ -484,9 +484,15 @@
         const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 
         // ---------- console (shows what travels over the socket) ----------
+        const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG"];
+        let warnedUnknown = false;
         const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
         function logLine(tag, text) {
+            try { writeLine(tag, text); } catch (err) { /* logging must never break the chat */ }
+        }
+
+        function writeLine(tag, text) {
             const stick = consoleBody.scrollHeight - consoleBody.scrollTop - consoleBody.clientHeight < 40;
             const line = document.createElement("span");
             line.className = "cl";
@@ -595,9 +601,23 @@
             };
 
             socket.onmessage = (event) => {
-                const data = String(event.data);
+                let data = String(event.data);
+
+                // The original lab server wraps every message as "User <n> says: <text>".
+                // Unwrap it so the chat still works if that server is running.
+                const wrapped = /^User \d+ says: ([\s\S]*)$/.exec(data);
+                if (wrapped) data = wrapped[1];
+
                 const m = parse(data);
                 logLine("Server", m.type === "MSG" ? m.name + " says: " + m.payload : data);
+
+                if (PACKET_TYPES.indexOf(m.type) < 0) {
+                    if (!warnedUnknown) {
+                        warnedUnknown = true;
+                        logLine("System", "Ignored a message that isn't a Chatterbox packet. If the chat stays empty, make sure the server is running the new app.bzg.");
+                    }
+                    return;
+                }
                 handle(data);
             };
 
