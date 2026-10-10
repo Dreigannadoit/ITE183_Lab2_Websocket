@@ -9,7 +9,7 @@
 
 <body>
     <h2>BSL WebSocket Client</h2>
-    
+
     <div id="status">Status: Connecting...</div>
 
     <div id="controls">
@@ -19,6 +19,71 @@ message..." disabled />
     </div>
 
     <div id="log"></div>
+
+    <script>
+        const wsUrl = "ws://localhost:8000";
+        const socket = new WebSocket(wsUrl);
+
+        const statusDiv =
+            document.getElementById("status");
+        const logDiv = document.getElementById("log");
+        const msgInput =
+            document.getElementById("msgInput");
+        const sendBtn = document.getElementById("sendBtn");
+        function appendLog(text, className) {
+            const entry = document.createElement("div");
+            entry.className = className;
+            entry.textContent = text;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        socket.onopen = function () {
+            statusDiv.textContent = "Status: Connected to "
+                + wsUrl;
+            statusDiv.style.backgroundColor = "#d4edda";
+            statusDiv.style.color = "#155724";
+            msgInput.disabled = false;
+            sendBtn.disabled = false;
+            appendLog("[System] Handshake complete.
+WebSocket ready.", "system");
+};
+        socket.onmessage = function (event) {
+            appendLog("[Server] " + event.data,
+                "received");
+        };
+
+        socket.onclose = function (event) {
+            statusDiv.textContent = "Status: Disconnected";
+            statusDiv.style.backgroundColor = "#f8d7da";
+            statusDiv.style.color = "#721c24";
+            msgInput.disabled = true;
+            sendBtn.disabled = true;
+            appendLog("[System] Connection closed by
+server.", "system");
+};
+
+        socket.onerror = function (error) {
+            appendLog("[Error] WebSocket error occurred.",
+                "system");
+        };
+
+        function sendMessage() {
+            const text = msgInput.value.trim();
+            if (text.length > 0 && socket.readyState ===
+                WebSocket.OPEN) {
+                socket.send(text);
+                appendLog("[Client] " + text, "sent");
+                msgInput.value = "";
+            }
+        }
+
+        sendBtn.addEventListener("click", sendMessage);
+        msgInput.addEventListener("keypress", function (e) {
+            if (e.key === "Enter") {
+                sendMessage();
+            }
+        });
+    </script>
 </body>
 
 </html>
