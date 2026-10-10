@@ -258,6 +258,41 @@
             box-shadow: 5px 5px 0 var(--ink), inset 0 -5px 0 rgba(0, 0, 40, .25), inset 0 4px 0 rgba(255, 255, 255, .25);
         }
 
+        .typing {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+            margin-left: 50px; /* lines up with other people's bubbles */
+            animation: slide .18s ease-out both;
+        }
+        .typing[hidden] { display: none; }
+        .typing-bubble {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 13px 18px;
+            background: var(--white);
+            border: 3px solid var(--ink);
+            border-radius: 20px 20px 20px 5px;
+            box-shadow: 5px 5px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .08);
+        }
+        .typing-bubble i {
+            width: 11px;
+            height: 11px;
+            border: 2px solid var(--ink);
+            border-radius: 50%;
+            background: var(--blue);
+            animation: dotbounce 1s ease-in-out infinite;
+        }
+        .typing-bubble i:nth-child(2) { background: var(--pink); animation-delay: .15s; }
+        .typing-bubble i:nth-child(3) { background: var(--green); animation-delay: .3s; }
+        @keyframes dotbounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-8px); }
+        }
+        .typing small { padding-left: 6px; font-size: 13px; font-weight: 800; color: #5b5273; }
+
         .sys {
             align-self: center;
             padding: 4px 14px 5px;
@@ -455,6 +490,10 @@
         <div class="body">
             <div id="log" class="log" role="log" aria-live="polite">
                 <div id="empty" class="empty">It's quiet in here. Say hi!</div>
+                <div id="typing" class="typing" hidden>
+                    <div class="typing-bubble" aria-hidden="true"><i></i><i></i><i></i></div>
+                    <small id="typingText"></small>
+                </div>
             </div>
 
             <aside id="panel" class="panel" aria-label="People online">
@@ -493,6 +532,9 @@
         const CLAIM_MS = 700;        // how long we wait for "taken" replies
         const HEARTBEAT_MS = 20000;  // how often we say "still here"
         const STALE_MS = 150000;     // forget people we haven't heard from
+        const TYPING_REFRESH_MS = 2500; // how often we repeat "I'm typing"
+        const TYPING_IDLE_MS = 3000;    // stop saying it after this much silence
+        const TYPING_TTL_MS = 5000;     // hide someone's dots if we hear nothing for this long
 
         const $ = (id) => document.getElementById(id);
         const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
@@ -500,10 +542,12 @@
         const msgInput = $("msgInput"), sendBtn = $("sendBtn");
         const logEl = $("log"), usersEl = $("users"), countEl = $("count");
         const panel = $("panel"), whoBtn = $("whoBtn");
+        const typingEl = $("typing"), typingText = $("typingText");
         const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 
         // ---------- console (shows what travels over the socket) ----------
-        const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG"];
+        const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING"];
+        const QUIET_TYPES = ["TYPING"];   // packets too chatty to list in the console
         let warnedUnknown = false;
         const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
@@ -650,6 +694,10 @@
         let myName = "";
         let claim = null;            // { name, timer } while we wait to see if a name is free
         const peers = new Map();     // id -> { name, seen }
+        const typers = new Map();    // id -> { name, timer }  (people typing right now)
+        let iAmTyping = false;
+        let typingSentAt = 0;
+        let typingIdleTimer = null;
 
         const same = (a, b) => a.toLowerCase() === b.toLowerCase();
 
@@ -673,7 +721,7 @@
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(text);
                 const m = parse(text);
-                logLine("Client", m.type === "MSG" ? m.payload : text);
+                if (QUIET_TYPES.indexOf(m.type) < 0) logLine("Client", m.type === "MSG" ? m.payload : text);
                 return true;
             }
             return false;
@@ -726,7 +774,7 @@
                 if (wrapped) data = wrapped[1];
 
                 const m = parse(data);
-                logLine("Server", m.type === "MSG" ? m.name + " says: " + m.payload : data);
+                if (QUIET_TYPES.indexOf(m.type) < 0) logLine("Server", m.type === "MSG" ? m.name + " says: " + m.payload : data);
 
                 if (PACKET_TYPES.indexOf(m.type) < 0) {
                     if (!warnedUnknown) {
@@ -740,6 +788,8 @@
 
             socket.onclose = () => {
                 if (claim) { clearTimeout(claim.timer); claim = null; }
+                cancelTyping();
+                clearAllTypers();
                 setStatus("offline");
                 logLine("System", "Connection closed. Retrying in " + (retryDelay / 1000) + "s ...");
                 if (joined) addSystem("Connection lost. Trying to reconnect...");
@@ -776,18 +826,23 @@
                 if (m.id !== myId) sendPacket("HERE", myId, myName, "");
             } else if (m.type === "HERE") {
                 addPeer(m.id, m.name);
+            } else if (m.type === "TYPING") {
+                if (m.id !== myId) setTyper(m.id, m.name, m.payload === "1");
             } else if (m.type === "BYE") {
+                clearTyper(m.id);
                 if (peers.delete(m.id)) {
                     renderUsers();
                     addSystem(m.name + " left the chat");
                 }
             } else if (m.type === "MSG") {
+                clearTyper(m.id);
                 addPeer(m.id, m.name);
                 addMessage(m.id, m.name, m.payload);
             }
         }
 
         function resetPeers() {
+            clearAllTypers();
             peers.clear();
             peers.set(myId, { name: myName, seen: Date.now() });
             renderUsers();
@@ -797,6 +852,81 @@
             const known = peers.get(id);
             peers.set(id, { name, seen: Date.now() });
             if (!known || known.name !== name) renderUsers();
+        }
+
+        // ---------- typing indicator ----------
+        // What we send: TYPING|id|name|1 while typing, TYPING|id|name|0 when we stop.
+        function stopTyping() {
+            clearTimeout(typingIdleTimer);
+            if (iAmTyping) {
+                iAmTyping = false;
+                sendPacket("TYPING", myId, myName, "0");
+            }
+        }
+
+        // Used after sending a message or losing the connection: others hide our dots
+        // on their own, so no extra packet is needed.
+        function cancelTyping() {
+            clearTimeout(typingIdleTimer);
+            iAmTyping = false;
+        }
+
+        msgInput.addEventListener("input", () => {
+            if (!joined) return;
+            if (msgInput.value.trim() === "") { stopTyping(); return; }
+            const now = Date.now();
+            if (!iAmTyping || now - typingSentAt > TYPING_REFRESH_MS) {
+                sendPacket("TYPING", myId, myName, "1");
+                typingSentAt = now;
+                iAmTyping = true;
+            }
+            clearTimeout(typingIdleTimer);
+            typingIdleTimer = setTimeout(stopTyping, TYPING_IDLE_MS);
+        });
+
+        // What we receive
+        function setTyper(id, name, on) {
+            const existed = typers.get(id);
+            if (existed) clearTimeout(existed.timer);
+            if (!on) {
+                if (existed) { typers.delete(id); renderTyping(); }
+                return;
+            }
+            typers.set(id, { name, timer: setTimeout(() => clearTyper(id), TYPING_TTL_MS) });
+            if (!existed || existed.name !== name) renderTyping();
+        }
+
+        function clearTyper(id) {
+            const t = typers.get(id);
+            if (!t) return;
+            clearTimeout(t.timer);
+            typers.delete(id);
+            renderTyping();
+        }
+
+        function clearAllTypers() {
+            typers.forEach((t) => clearTimeout(t.timer));
+            typers.clear();
+            renderTyping();
+        }
+
+        function typingLabel(names) {
+            if (names.length === 1) return names[0] + " is typing";
+            if (names.length === 2) return names[0] + " and " + names[1] + " are typing";
+            if (names.length === 3) return names[0] + ", " + names[1] + " and " + names[2] + " are typing";
+            return "Several people are typing";
+        }
+
+        function renderTyping() {
+            const names = Array.from(typers.values()).map((t) => t.name);
+            if (names.length === 0) {
+                typingEl.hidden = true;
+                return;
+            }
+            const stick = nearBottom();
+            typingText.textContent = typingLabel(names);
+            typingEl.hidden = false;
+            if (stick) logEl.scrollTop = logEl.scrollHeight;
         }
 
         function startClaim(name) {
@@ -874,7 +1004,7 @@
             const stick = force || nearBottom();
             const empty = $("empty");
             if (empty) empty.remove();
-            logEl.appendChild(node);
+            logEl.insertBefore(node, typingEl); // the typing bubble always stays last
             if (stick) logEl.scrollTop = logEl.scrollHeight;
         }
 
@@ -953,6 +1083,7 @@
             if (!text || !joined) return;
             if (sendPacket("MSG", myId, myName, text)) {
                 msgInput.value = "";
+                cancelTyping();
             }
             msgInput.focus();
         });
