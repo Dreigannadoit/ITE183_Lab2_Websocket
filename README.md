@@ -5,7 +5,7 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ## Features
 
 - **Accounts**: a **Sign up** page (username, password, confirm password) and a **Log in** page (username, password). Usernames are unique (case-insensitive), 2–16 characters, no `|`
-- **Saved chat**: every text message is stored, so when you log in again the earlier conversation in each channel is already there (last 300 per channel)
+- **Saved chat**: every text message is stored, so when you log in again the earlier conversation in each channel is already there (the last 100 per channel are sent on login; up to 2000 messages are kept in total)
 - **Log out** button in your user card
 - The same account can't be online twice at once (a second login is refused until the first tab closes)
 - Join and leave announcements
@@ -30,8 +30,8 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 .
 ├── start-server.bat     # Windows launcher: firewall rule, shows your IP, runs the server
 ├── app.bzg              # The entire server: web page, live chat relay, accounts, saved chat
-├── database/            # Only if PERSIST = true in app.bzg
-│   ├── users.txt        # Accounts: username|password
+├── database/            # Only used if PERSIST = true in app.bzg
+│   ├── users.txt        # Accounts: username|password (created on first signup)
 │   └── chatlogs.txt     # Saved messages: channel|user|timestamp|text
 ├── package.json
 ├── lib/
@@ -40,6 +40,8 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 │   └── http/http.dll    # Native HTTP/WebSocket library
 ├── public/
 │   ├── index.html       # Chatterbox client (join screen + chat screen)
+│   ├── app.js           # Client logic
+│   ├── style.css        # Cartoon-style theme
 │   └── 404.html
 └── README.md
 ```
@@ -47,7 +49,7 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ## Requirements
 
 - Windows (the native module is a `.dll`)
-- The **Bonezegei** interpreter, available as `bonezegei`
+- The **Bonezegei** interpreter, available as `bonezegei` (tested with v1.3.3)
 - A modern web browser
 
 ## Getting Started
@@ -73,7 +75,9 @@ Accounts and history use the **same WebSocket as the chat**, so only port **8000
 
 The server remembers which tab (`id`) logged in, so `SAVE` and `HISTORY` only work after a login.
 
-**Where the data lives.** Accounts and messages are kept in lists inside `app.bzg`, so they last until the server stops. To keep them across restarts set `PERSIST = true` at the top of `app.bzg`; they are then written to `database/users.txt` and `database/chatlogs.txt` and read back on start. This uses `readFile` / `writeFile`, which are wrapped in `fileRead` / `fileWrite` near the bottom of the settings area. If your Bonezegei build names its file functions differently, change them there.
+**Where the data lives.** Accounts and messages are kept in lists inside `app.bzg`, so by default they last until the server stops. To keep them across restarts set `PERSIST = true` at the top of `app.bzg`; they are then written to `database/users.txt` and `database/chatlogs.txt` (using BSL's `readFile` / `writeFile`) and read back on start. The `database/` folder must exist. Messages are held in a fixed-size ring buffer, so once `MAX_LOG` (2000) messages are stored the oldest is overwritten.
+
+Older versions of this project stored accounts in `database/users.js` and `chatlogs.js` through Node. Those files are no longer used and can be deleted. To keep an old account, add a line `username|password` to `database/users.txt`.
 
 **This is a personal project, so there is no security:** passwords are saved as plain text and the login is tied to the browser tab's random id.
 
@@ -198,6 +202,9 @@ Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one por
 
 - **Console shows messages but the chat area stays empty:** open the Console and look at the `[Server]` lines. Chatterbox messages look like `HELLO|...` or `Alice says: Hello`. If you see a `[System] Ignored a message...` line, the server is running an old `app.bzg`. Replace the one in the project root with the relay version and restart. The page also understands the original lab server's `User <n> says: ...` format, so chat still works with it.
 
+- **`Attempt to call method on non-object type` when the server runs:** `app.bzg` called a method on a string or array (such as `.indexOf`, `.length` or `.push`). BSL has none, see "Editing app.bzg" below. The line number it reports is often the end of the file, not the real spot.
+- **`Undefined variable <name>` when the server runs:** a function is called before it is defined. Move it above the code that calls it.
+- **`Array index -1 out of bounds`:** an index was used before being checked. `||` and `&&` do not short-circuit in BSL.
 - **Works on the PC but not on other devices:** open the page on the PC using your IP address (not `localhost`). If that works but other devices fail, it's the firewall (run the `.bat` as administrator once) or the Wi-Fi. Guest networks and some routers block devices from talking to each other ("client isolation" or "AP isolation").
 - **Phone is on mobile data:** turn mobile data off so it uses the same Wi-Fi as the PC.
 - **Wrong IP:** VPNs, WSL and VirtualBox add extra addresses. Use the one that starts with `192.168` or `10.`.
@@ -207,6 +214,16 @@ Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one por
 - **"That account is already online":** that login is open in another tab or device. Wait a few minutes if it was a crashed tab.
 - **Port already in use:** close the other program or change the port.
 
+## Editing app.bzg: Bonezegei rules learned the hard way
+
+Bonezegei looks like JavaScript but is much smaller. These rules were verified against interpreter v1.3.3:
+
+- **Strings and arrays have no methods.** Use `sizeof(x)` for length, `substr(s, start, len)` for slices, `s[i]` for one character, and `arr[sizeof(arr)] = value` to append. There is no `indexOf`, `split`, `toLowerCase`, `push` or `shift`; `app.bzg` has its own `indexOfChar()` and `lower()` helpers. Arrays cannot shrink.
+- **Define functions before using them.** A function can only call functions defined above it in the file.
+- **No short-circuit evaluation.** `a || b` and `a && b` evaluate both sides, so guard an index with a separate `if` first.
+- **Strings cannot be compared with `<` or `>`**, only `==` and `!=`.
+- `null` prints as `0`, `readFile` of a missing file returns an empty string, and `%` is the modulo operator.
+
 ## License
 
-MIT
+MIT
