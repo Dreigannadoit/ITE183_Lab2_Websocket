@@ -60,10 +60,56 @@ var logCh = [];         // channel
 var logUser = [];       // who wrote it
 var logTs = [];         // timestamp (ms since 1970, supplied by the sender's browser)
 var logText = [];       // the message
+var logN = 0;           // how many messages are stored (never more than MAX_LOG)
+var logHead = 0;        // slot of the oldest message once the list is full (ring buffer)
 
 // ------------------------------------------
 // SMALL HELPERS
 // ------------------------------------------
+// NOTE: Bonezegei strings and arrays have NO methods (no .indexOf, .substring,
+// .length, .push, .toLowerCase ...). Calling one gives
+//   "Attempt to call method on non-object type".
+// Use sizeof(x), substr(s, start, len), s[i] and arr[sizeof(arr)] = value instead.
+//
+// Also: a function must be defined ABOVE the functions that call it, otherwise the
+// call fails with "Undefined variable <name>". Keep helpers at the top.
+
+var UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+var LOWER = "abcdefghijklmnopqrstuvwxyz";
+
+// Position of the first `ch` in `s` at or after `from`, or -1.
+function indexOfChar(s, ch, from) {
+    var i = from;
+    var n = sizeof(s);
+    while (i < n) {
+        if (s[i] == ch) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// lower-case copy of a string (no built-in toLowerCase)
+function lower(s) {
+    var out = "";
+    var i = 0;
+    var n = sizeof(s);
+    while (i < n) {
+        var c = s[i];
+        var r = c;
+        var j = 0;
+        while (j < 26) {
+            if (UPPER[j] == c) {
+                r = LOWER[j];
+            }
+            j = j + 1;
+        }
+        out = out + r;
+        i = i + 1;
+    }
+    return out;
+}
 
 // Splits  TYPE|id|name|payload  into 4 parts. The last part keeps any extra "|".
 function parsePacket(data) {
@@ -71,27 +117,27 @@ function parsePacket(data) {
     var rest = data;
     var i = 0;
     while (i < 3) {
-        var k = rest.indexOf("|");
+        var k = indexOfChar(rest, "|", 0);
         if (k < 0) {
-            parts.push(rest);
+            parts[sizeof(parts)] = rest;
             rest = "";
         } else {
-            parts.push(rest.substring(0, k));
-            rest = rest.substring(k + 1);
+            parts[sizeof(parts)] = substr(rest, 0, k);
+            rest = substr(rest, k + 1);
         }
         i = i + 1;
     }
-    parts.push(rest);
+    parts[sizeof(parts)] = rest;
     return parts;
 }
 
 // Splits  timestamp|text  into 2 parts.
 function parsePair(data) {
-    var k = data.indexOf("|");
+    var k = indexOfChar(data, "|", 0);
     if (k < 0) {
         return [data, ""];
     }
-    return [data.substring(0, k), data.substring(k + 1)];
+    return [substr(data, 0, k), substr(data, k + 1)];
 }
 
 function reply(clientId, type, id, name, payload) {
@@ -99,10 +145,10 @@ function reply(clientId, type, id, name, payload) {
 }
 
 function findUser(name) {
-    var wanted = name.toLowerCase();
+    var wanted = lower(name);
     var i = 0;
-    while (i < userName.length) {
-        if (userName[i].toLowerCase() == wanted) {
+    while (i < sizeof(userName)) {
+        if (lower(userName[i]) == wanted) {
             return i;
         }
         i = i + 1;
@@ -112,7 +158,7 @@ function findUser(name) {
 
 function findSession(id) {
     var i = 0;
-    while (i < sessId.length) {
+    while (i < sizeof(sessId)) {
         if (sessId[i] == id) {
             return i;
         }
@@ -124,8 +170,8 @@ function findSession(id) {
 function startSession(id, name) {
     var at = findSession(id);
     if (at < 0) {
-        sessId.push(id);
-        sessName.push(name);
+        sessId[sizeof(sessId)] = id;
+        sessName[sizeof(sessName)] = name;
     } else {
         sessName[at] = name;
     }
@@ -133,7 +179,7 @@ function startSession(id, name) {
 
 function channelKnown(ch) {
     var i = 0;
-    while (i < CHANNELS.length) {
+    while (i < sizeof(CHANNELS)) {
         if (CHANNELS[i] == ch) {
             return true;
         }
@@ -142,111 +188,27 @@ function channelKnown(ch) {
     return false;
 }
 
-// ------------------------------------------
-// ACCOUNTS
-// ------------------------------------------
-function doSignup(clientId, id, name, password) {
-    if (name.length < 2 || name.length > 16) {
-        reply(clientId, "AUTHERR", id, "Username needs 2 to 16 characters.", "");
-        return;
-    }
-    if (password.length < 1) {
-        reply(clientId, "AUTHERR", id, "Please choose a password.", "");
-        return;
-    }
-    if (findUser(name) >= 0) {
-        reply(clientId, "AUTHERR", id, "That username is already registered.", "");
-        return;
-    }
-
-    userName.push(name);
-    userPass.push(password);
-    saveUsers();
-    print("New user confirmed: " + name);
-
-    startSession(id, name);
-    reply(clientId, "AUTHOK", id, name, "");
+// Message list is a ring buffer: arrays can only grow, so once MAX_LOG messages are
+// stored the oldest slot is overwritten. logSlot(k) = slot of the k-th oldest message.
+function logSlot(k) {
+    var pos = logHead + k;
+    return pos % MAX_LOG;
 }
 
-function doLogin(clientId, id, name, password) {
-    var at = findUser(name);
-    if (at < 0 || userPass[at] != password) {
-        reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
-        return;
+function addLog(channel, user, ts, text) {
+    var slot = 0;
+    if (logN < MAX_LOG) {
+        slot = logN;
+        logN = logN + 1;
+    } else {
+        slot = logHead;
+        var nextHead = logHead + 1;
+        logHead = nextHead % MAX_LOG;
     }
-    startSession(id, userName[at]);
-    reply(clientId, "AUTHOK", id, userName[at], "");
-}
-
-// ------------------------------------------
-// CHAT HISTORY
-// ------------------------------------------
-function doSave(clientId, id, channel, payload) {
-    var s = findSession(id);
-    if (s < 0) {
-        reply(clientId, "SAVEERR", id, "Please log in again.", "");
-        return;
-    }
-    var pair = parsePair(payload);
-    var text = pair[1];
-    if (text.length > MAX_TEXT) {
-        text = text.substring(0, MAX_TEXT);
-    }
-    if (!channelKnown(channel) || text.length < 1) {
-        return;
-    }
-
-    logCh.push(channel);
-    logUser.push(sessName[s]);
-    logTs.push(pair[0]);
-    logText.push(text);
-
-    // Keep the list from growing forever.
-    if (logCh.length > MAX_LOG) {
-        logCh.shift();
-        logUser.shift();
-        logTs.shift();
-        logText.shift();
-    }
-    saveLogs();
-}
-
-function doHistory(clientId, id) {
-    if (findSession(id) < 0) {
-        reply(clientId, "SAVEERR", id, "Please log in again.", "");
-        reply(clientId, "HISTEND", id, "", "");
-        return;
-    }
-    var c = 0;
-    while (c < CHANNELS.length) {
-        var ch = CHANNELS[c];
-
-        // How many saved messages does this channel have?
-        var count = 0;
-        var i = 0;
-        while (i < logCh.length) {
-            if (logCh[i] == ch) {
-                count = count + 1;
-            }
-            i = i + 1;
-        }
-
-        // Send only the newest HISTORY_PER_CHANNEL of them, oldest first.
-        var skip = count - HISTORY_PER_CHANNEL;
-        var seen = 0;
-        i = 0;
-        while (i < logCh.length) {
-            if (logCh[i] == ch) {
-                if (seen >= skip) {
-                    reply(clientId, "HIST", id, logUser[i], ch + "|" + logTs[i] + "|" + logText[i]);
-                }
-                seen = seen + 1;
-            }
-            i = i + 1;
-        }
-        c = c + 1;
-    }
-    reply(clientId, "HISTEND", id, "", "");
+    logCh[slot] = channel;
+    logUser[slot] = user;
+    logTs[slot] = ts;
+    logText[slot] = text;
 }
 
 // ------------------------------------------
@@ -271,7 +233,7 @@ function saveUsers() {
     }
     var out = "";
     var i = 0;
-    while (i < userName.length) {
+    while (i < sizeof(userName)) {
         out = out + userName[i] + "|" + userPass[i] + "\n";
         i = i + 1;
     }
@@ -284,11 +246,135 @@ function saveLogs() {
     }
     var out = "";
     var i = 0;
-    while (i < logCh.length) {
-        out = out + logCh[i] + "|" + logUser[i] + "|" + logTs[i] + "|" + logText[i] + "\n";
+    while (i < logN) {
+        var at = logSlot(i);
+        out = out + logCh[at] + "|" + logUser[at] + "|" + logTs[at] + "|" + logText[at] + "\n";
         i = i + 1;
     }
     fileWrite(LOGS_FILE, out);
+}
+
+// ------------------------------------------
+// ACCOUNTS
+// ------------------------------------------
+function doSignup(clientId, id, name, password) {
+    if (sizeof(name) < 2 || sizeof(name) > 16) {
+        reply(clientId, "AUTHERR", id, "Username needs 2 to 16 characters.", "");
+        return;
+    }
+    if (sizeof(password) < 1) {
+        reply(clientId, "AUTHERR", id, "Please choose a password.", "");
+        return;
+    }
+    if (findUser(name) >= 0) {
+        reply(clientId, "AUTHERR", id, "That username is already registered.", "");
+        return;
+    }
+
+    userName[sizeof(userName)] = name;
+    userPass[sizeof(userPass)] = password;
+    saveUsers();
+    print("New user confirmed: " + name);
+
+    startSession(id, name);
+    reply(clientId, "AUTHOK", id, name, "");
+}
+
+function doLogin(clientId, id, name, password) {
+    var at = findUser(name);
+    // (|| and && do not short-circuit in BSL, so check the index first on its own)
+    if (at < 0) {
+        reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
+        return;
+    }
+    if (userPass[at] != password) {
+        reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
+        return;
+    }
+    startSession(id, userName[at]);
+    reply(clientId, "AUTHOK", id, userName[at], "");
+}
+
+// ------------------------------------------
+// CHAT HISTORY
+// ------------------------------------------
+function doSave(clientId, id, channel, payload) {
+    var s = findSession(id);
+    if (s < 0) {
+        reply(clientId, "SAVEERR", id, "Please log in again.", "");
+        return;
+    }
+    var pair = parsePair(payload);
+    var text = pair[1];
+    if (sizeof(text) > MAX_TEXT) {
+        text = substr(text, 0, MAX_TEXT);
+    }
+    if (!channelKnown(channel) || sizeof(text) < 1) {
+        return;
+    }
+
+    addLog(channel, sessName[s], pair[0], text);
+    saveLogs();
+}
+
+function doHistory(clientId, id) {
+    if (findSession(id) < 0) {
+        reply(clientId, "SAVEERR", id, "Please log in again.", "");
+        reply(clientId, "HISTEND", id, "", "");
+        return;
+    }
+    var c = 0;
+    while (c < sizeof(CHANNELS)) {
+        var ch = CHANNELS[c];
+
+        // How many saved messages does this channel have?
+        var count = 0;
+        var i = 0;
+        while (i < logN) {
+            if (logCh[logSlot(i)] == ch) {
+                count = count + 1;
+            }
+            i = i + 1;
+        }
+
+        // Send only the newest HISTORY_PER_CHANNEL of them, oldest first.
+        var skip = count - HISTORY_PER_CHANNEL;
+        var seen = 0;
+        i = 0;
+        while (i < logN) {
+            var at = logSlot(i);
+            if (logCh[at] == ch) {
+                if (seen >= skip) {
+                    reply(clientId, "HIST", id, logUser[at], ch + "|" + logTs[at] + "|" + logText[at]);
+                }
+                seen = seen + 1;
+            }
+            i = i + 1;
+        }
+        c = c + 1;
+    }
+    reply(clientId, "HISTEND", id, "", "");
+}
+
+// ------------------------------------------
+// LOADING FROM DISK (only used when PERSIST = true)
+// ------------------------------------------
+// Takes the first line off `text`; returns [line, restOfText].
+function nextLine(text) {
+    var nl = indexOfChar(text, "\n", 0);
+    var line = text;
+    var rest = "";
+    if (nl >= 0) {
+        line = substr(text, 0, nl);
+        rest = substr(text, nl + 1);
+    }
+    var n = sizeof(line);
+    if (n > 0) {
+        if (line[n - 1] == "\r") {
+            line = substr(line, 0, n - 1);
+        }
+    }
+    return [line, rest];
 }
 
 function loadAll() {
@@ -296,41 +382,26 @@ function loadAll() {
         return;
     }
     var text = fileRead(USERS_FILE);
-    while (text != null && text.length > 0) {
-        var nl = text.indexOf("\n");
-        var line = text;
-        if (nl >= 0) {
-            line = text.substring(0, nl);
-            text = text.substring(nl + 1);
-        } else {
-            text = "";
-        }
-        if (line.length > 0) {
-            var u = parsePacket(line);     // username | password | (nothing) | (nothing)
-            userName.push(u[0]);
-            userPass.push(u[1]);
+    while (sizeof(text) > 0) {
+        var l1 = nextLine(text);
+        text = l1[1];
+        if (sizeof(l1[0]) > 0) {
+            var u = parsePacket(l1[0]);     // username | password | (nothing) | (nothing)
+            userName[sizeof(userName)] = u[0];
+            userPass[sizeof(userPass)] = u[1];
         }
     }
 
     text = fileRead(LOGS_FILE);
-    while (text != null && text.length > 0) {
-        var nl2 = text.indexOf("\n");
-        var line2 = text;
-        if (nl2 >= 0) {
-            line2 = text.substring(0, nl2);
-            text = text.substring(nl2 + 1);
-        } else {
-            text = "";
-        }
-        if (line2.length > 0) {
-            var m = parsePacket(line2);    // channel | user | timestamp | text
-            logCh.push(m[0]);
-            logUser.push(m[1]);
-            logTs.push(m[2]);
-            logText.push(m[3]);
+    while (sizeof(text) > 0) {
+        var l2 = nextLine(text);
+        text = l2[1];
+        if (sizeof(l2[0]) > 0) {
+            var m = parsePacket(l2[0]);     // channel | user | timestamp | text
+            addLog(m[0], m[1], m[2], m[3]);
         }
     }
-    print("Loaded " + userName.length + " user(s) and " + logCh.length + " saved message(s).");
+    print("Loaded " + sizeof(userName) + " user(s) and " + logN + " saved message(s).");
 }
 
 loadAll();
@@ -368,10 +439,10 @@ server.onConnect = function (clientId) {
 
 server.onData = function (message, clientId) {
     // Work out the packet type (the text before the first "|").
-    var k = message.indexOf("|");
+    var k = indexOfChar(message, "|", 0);
     var type = message;
     if (k >= 0) {
-        type = message.substring(0, k);
+        type = substr(message, 0, k);
     }
 
     // Account and history packets are answered to the sender only, never broadcast.
