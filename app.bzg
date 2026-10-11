@@ -434,10 +434,17 @@ server.get = function (path, data){
 server.onConnect = function (clientId) {
     print("WebSocket connected! Client ID: " + clientId);
 
+    // Send a welcome message to this specific client
     server.send(clientId, "Welcome toWebSocket server!");
 };
 
 server.onData = function (message, clientId) {
+    print("Received from Client " + clientId + ": " + message);
+
+    // Echo the message back to the sender
+    //server.send(clientId, "Echo: " + message);
+    //server.send(clientId, message);
+
     // Work out the packet type (the text before the first "|").
     var k = indexOfChar(message, "|", 0);
     var type = message;
