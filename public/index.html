@@ -147,12 +147,14 @@
             <span id="consoleGrip" class="console-grip" role="button" tabindex="0"
                 aria-label="Move console. Drag it, or use the arrow keys. Press Escape to reset."
                 title="Drag to move. Double-click to reset."></span>
-            <button id="consoleToggle" class="console-toggle" type="button" aria-expanded="false" aria-controls="consoleBody">
-                <span class="chev" aria-hidden="true">&#9650;</span> Console
+            <button id="consoleToggle" class="console-toggle" type="button" aria-expanded="false" aria-controls="consoleBody" aria-label="Console" title="Console">
+                <span class="term-icon" aria-hidden="true">&gt;_</span>
+                <span class="chev" aria-hidden="true">&#9650;</span>
+                <span class="lbl">Console</span>
             </button>
             <button id="consoleClear" class="console-clear" type="button">Clear</button>
         </div>
-        <div id="consoleBody" class="console-body" role="log" hidden></div>
+        <div id="consoleBody" class="console-body" role="log" inert></div>
     </aside>
 
     <script src="app.js"></script>

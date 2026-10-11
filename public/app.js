@@ -105,10 +105,17 @@ if (window.ResizeObserver) new ResizeObserver(placeConsole).observe($("chatForm"
 consoleToggle.addEventListener("click", () => {
     if (suppressClick) return; // this click was the end of a drag
     const open = consoleEl.classList.toggle("open");
-    consoleBody.hidden = !open;
+    consoleBody.inert = !open;
     consoleToggle.setAttribute("aria-expanded", open);
     if (open) consoleBody.scrollTop = consoleBody.scrollHeight;
-    if (userPlaced) clampConsole(); // opening makes it taller: keep it on screen
+    if (userPlaced) clampConsole(); // opening makes it bigger: keep it on screen
+});
+
+// The console grows and shrinks with an animation, so check again once it has stopped moving.
+consoleEl.addEventListener("transitionend", (e) => {
+    if (e.target !== consoleEl && e.target !== consoleBody) return;
+    if (consoleEl.classList.contains("open")) consoleBody.scrollTop = consoleBody.scrollHeight;
+    if (userPlaced) clampConsole();
 });
 $("consoleClear").addEventListener("click", () => consoleBody.replaceChildren());
 

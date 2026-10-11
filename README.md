@@ -21,7 +21,7 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 - Your name and connection status in a user card at the bottom of the channel list
 - Auto-reconnect: if the connection drops, the client retries and tells everyone it is back
 - Live **typing indicator**, per channel: while someone types, everyone else *in that channel* sees bouncing dots and "Name is typing" under them ("Name and Name are typing" for two people, and so on)
-- Collapsible **Console** at the bottom left showing the raw `[System]`, `[Server]` and `[Client]` traffic, like the original lab UI (handy for debugging connections). Drag it by its purple header (or the dotted grip) to put it anywhere; double-click the grip or press Escape on it to send it back to the bottom left. Arrow keys move it too, and it remembers its position.
+- Collapsible **Console** at the bottom left: a small `>_` square when closed that grows open with an animation. It shows the raw `[System]`, `[Server]` and `[Client]` traffic, like the original lab UI (handy for debugging connections). Drag it by its purple header (or the dotted grip) to put it anywhere; double-click the grip or press Escape on it to send it back to the bottom left. Arrow keys move it too, and it remembers its position.
 - Responsive layout: on phones the channel list and the online list become slide-in drawers (the **Channels** and **Who's here** buttons)
 
 ## Project Structure
