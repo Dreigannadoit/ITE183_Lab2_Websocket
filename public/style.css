@@ -377,6 +377,15 @@ body {
     background: var(--blue);
     box-shadow: 5px 5px 0 var(--ink), inset 0 -5px 0 rgba(0, 0, 40, .25), inset 0 4px 0 rgba(255, 255, 255, .25);
 }
+/* Your own messages sit on the right: bubble first, avatar on the far edge, tail flipped. */
+.msg.mine { grid-template-columns: minmax(0, 1fr) 40px; }
+.msg.mine .gutter { grid-column: 2; grid-row: 1; }
+.msg.mine .content { grid-column: 1; grid-row: 1; align-items: flex-end; }
+.msg.mine .meta { flex-direction: row-reverse; }
+.msg.mine .bubble { border-radius: 18px 18px 6px 18px; }
+.msg.mine .gutter time { right: auto; left: 0; }
+.msg.mine.mention { box-shadow: inset -5px 0 0 var(--orange); }
+
 .mention-tag { padding: 0 6px 1px; font-weight: 800; color: var(--ink); background: var(--sky); border: 2px solid var(--ink); border-radius: 8px; }
 .mention-tag.me { background: var(--yellow); }
 
@@ -693,4 +702,4 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-}
+}
