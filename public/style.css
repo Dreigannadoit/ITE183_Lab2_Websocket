@@ -60,6 +60,11 @@ body {
     padding: 10px 22px 12px;
     cursor: pointer;
     box-shadow: 0 6px 0 var(--ink), inset 0 4px 0 rgba(255, 255, 255, .45);
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
     transform: translateY(0);
     transition: transform .08s, box-shadow .08s;
 }
@@ -693,4 +698,4 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
-}
+}
