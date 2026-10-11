@@ -33,12 +33,19 @@ server.get = function (path, data){
 
 server.onConnect = function (clientId) {
     print("WebSocket connected! Client ID: " + clientId);
+
+    server.send(clientId, "Welcome toWebSocket server!");
 };
 
 server.onData = function (message, clientId) {
-    // Pictures arrive as many small packets, so only the sender is printed here.
-    print("Received from Client " + clientId);
-    server.sendAll(message);
+    print("Received from Client " + clientId + ": " + message);
+
+    // Echo the message back to the sender
+    //server.send(clientId, "Echo: " + message);
+    //server.send(clientId, message);
+
+    // Or broadcast it to everyone connected
+    server.sendAll("User " + clientId + " says: " + message);
 };
 
 server.onDisconnect = function (clientId) {
