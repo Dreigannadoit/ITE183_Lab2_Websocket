@@ -4,8 +4,10 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 
 ## Features
 
-- Username screen before chatting (2–16 characters, no `|` or `,`)
-- Duplicate usernames are rejected (case-insensitive), even if two people join at the same instant
+- **Accounts**: a **Sign up** page (username, password, confirm password) and a **Log in** page (username, password). Usernames are unique (case-insensitive), 2–16 characters, no `|`
+- **Saved chat**: every text message is stored, so when you log in again the earlier conversation in each channel is already there (last 300 per channel)
+- **Log out** button in your user card
+- The same account can't be online twice at once (a second login is refused until the first tab closes)
 - Join and leave announcements
 - Live "Online" list, updated whenever someone joins or leaves
 - **Channels** (`#general`, `#random`, `#help`, `#memes`): each has its own messages, header and topic. Switch with a click or **Alt + Up/Down**
@@ -27,7 +29,12 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ```
 .
 ├── start-server.bat     # Windows launcher: firewall rule, shows your IP, runs the server
-├── app.bzg              # Server: HTTP routes + WebSocket relay
+├── app.bzg              # Server: HTTP routes + WebSocket relay (live chat)
+├── server/
+│   └── accounts.js      # Node server: sign up, log in, chat history (port 8001)
+├── database/            # Created automatically on first run
+│   ├── users.js         # All accounts: id, username, password, createdAt
+│   └── chatlogs.js      # All saved messages, per channel
 ├── package.json
 ├── lib/
 │   ├── http.bzg         # Loads the native http module
@@ -43,19 +50,42 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 
 - Windows (the native module is a `.dll`)
 - The **Bonezegei** interpreter, available as `bonezegei`
+- **Node.js** (any recent version, no packages to install) for accounts and saved chat
 - A modern web browser
 
 ## Getting Started
 
+Two programs need to be running (`start-server.bat` starts both for you):
+
 ```bash
-bonezegei app.bzg     # or: npm start
+bonezegei app.bzg          # live chat + the web page   (npm start)
+node server/accounts.js    # accounts + saved chat      (npm run accounts)
 ```
 
-Open <http://localhost:8000>, pick a username and start chatting. Open a second tab or device on the same network (use the host machine's IP instead of `localhost`) to chat with yourself.
+Open <http://localhost:8000>, create an account on the **Sign up** tab and start chatting. Open a second tab or device on the same network (use the host machine's IP instead of `localhost`) to chat with yourself.
+
+## Accounts and saved chat
+
+`server/accounts.js` is a small Node server on port **8001** (built-in modules only). The page talks to it with `fetch`, using the same host name it was opened from.
+
+| Route | What it does |
+| ----- | ------------ |
+| `POST /api/signup` | Checks the form (2–16 character name, password, passwords match, name not taken). On success it **rewrites `database/users.js`** and logs the person in |
+| `POST /api/login` | Checks username and password and returns a session token |
+| `GET /api/history` | Returns the saved messages of every channel (needs the token) |
+| `POST /api/messages` | Saves one message (needs the token). The browser calls it every time you send a message |
+
+`database/users.js` and `database/chatlogs.js` are real JavaScript modules (`module.exports = [...]`), rewritten whole each time. You can open and read them, or `require()` them from another script. Delete a file to reset it.
+
+**This is a personal project, so there is no security:** passwords are saved as plain text, anyone who can open port 8001 can reach the API, and the session token lives only in server memory (restarting `accounts.js` means people log in again).
+
+**What is saved:** text messages only. Pictures, join/leave notices and typing dots are live only, as before. If the accounts server is down, the page says so at login.
+
+**Settings:** `PORT`, `CHANNELS` and `HISTORY_PER_CHANNEL` at the top of `server/accounts.js`. If you add a channel in `public/app.js`, add it to `CHANNELS` there too.
 
 ## How It Works
 
-The server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. All chat logic lives in `public/index.html`.
+The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/app.js`; accounts and saved messages are handled by `server/accounts.js`.
 
 This is on purpose. An earlier version kept the username list on the server in a BSL array, and it misbehaved (messages were treated as new usernames, and the server stalled when two people joined together). The relay design only uses `sendAll`, which is the same thing the original lab server did.
 
@@ -105,7 +135,8 @@ If a message arrives without a known channel in front (for example from an older
 
 - Because the server doesn't check anything, a person who edits the page's code could pretend to be someone else. That's fine for a lab or a class demo, but not for real use.
 - If someone's browser crashes (no `BYE`), their name stays in the list for up to 2.5 minutes.
-- You only see messages sent after you joined.
+- Pictures are not saved (only text), so they are gone after a refresh.
+- Messages sent by others while your connection was down are not filled in until you log in again.
 
 ## Design
 
@@ -124,7 +155,7 @@ Fonts are Lilita One (headings) and Nunito (text), loaded from Google Fonts. Off
 
 Other phones and laptops on the same Wi-Fi can join the chat through your PC's IP address.
 
-1. **Start the server with `start-server.bat`** (double-click it). The first time, right-click it and choose **Run as administrator** so it can open the Windows Firewall for port 8000. After that, a normal double-click is enough.
+1. **Start the servers with `start-server.bat`** (double-click it). The first time, right-click it and choose **Run as administrator** so it can open the Windows Firewall for ports 8000 and 8001. After that, a normal double-click is enough.
 2. The window prints the addresses to share, for example `http://192.168.1.23:8000`. Use the one starting with `192.168` or `10.`.
 3. On the other device, connected to the **same Wi-Fi**, type that address into the browser.
 4. Pick different usernames and chat.
@@ -169,9 +200,10 @@ The page picks up the address it was opened from, so no code changes are needed 
 - **Wrong IP:** VPNs, WSL and VirtualBox add extra addresses. Use the one that starts with `192.168` or `10.`.
 
 - **Status shows Offline:** make sure the server is running. The client retries every 2 seconds.
-- **"That username is taken":** someone online already uses that name (case doesn't matter). Wait a few minutes if it was a crashed tab.
+- **"Can't reach the account server":** `node server/accounts.js` isn't running (or port 8001 is blocked by the firewall for other devices).
+- **"That account is already online":** that login is open in another tab or device. Wait a few minutes if it was a crashed tab.
 - **Port already in use:** close the other program or change the port.
 
 ## License
 
-MIT
+MIT

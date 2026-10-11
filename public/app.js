@@ -1,6 +1,10 @@
 // Chatterbox client. Loaded by index.html (must come after the page markup).
 
 // ---------- connection ----------
+// Accounts + chat history live in server/accounts.js (a separate small Node server).
+const API_PORT = 8001;
+const API = (location.protocol.indexOf("http") === 0 ? location.protocol + "//" + location.hostname : "http://localhost") + ":" + API_PORT;
+
 const wsUrl = location.protocol.indexOf("http") === 0
     ? (location.protocol === "https:" ? "wss://" : "ws://") + location.host
     : "ws://localhost:8000";
@@ -36,7 +40,12 @@ const CHANNELS = [
 
 const $ = (id) => document.getElementById(id);
 const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
-const nameInput = $("nameInput"), joinBtn = $("joinBtn"), joinError = $("joinError");
+const loginForm = $("loginForm"), signupForm = $("signupForm");
+const loginUser = $("loginUser"), loginPass = $("loginPass"), loginBtn = $("loginBtn"), loginError = $("loginError");
+const signupUser = $("signupUser"), signupPass = $("signupPass"), signupConfirm = $("signupConfirm");
+const signupBtn = $("signupBtn"), signupError = $("signupError");
+const tabLogin = $("tabLogin"), tabSignup = $("tabSignup"), authTagline = $("authTagline");
+const authFields = [loginUser, loginPass, loginBtn, signupUser, signupPass, signupConfirm, signupBtn];
 const msgInput = $("msgInput"), sendBtn = $("sendBtn");
 const logEl = $("log"), usersEl = $("users"), countEl = $("count");
 const panel = $("panel"), whoBtn = $("whoBtn"), chanBtn = $("chanBtn");
@@ -201,6 +210,8 @@ let state = "connecting";
 let joined = false;
 let myName = "";
 let claim = null;            // { name, timer } while we wait to see if a name is free
+let authToken = "";          // proves to the accounts server who we are
+let authBusy = false;        // true while a log in / sign up request is running
 const peers = new Map();     // id -> { name, seen }
 const typers = new Map();    // id -> { name, ch, timer }  (people typing right now)
 let iAmTyping = false;
@@ -224,10 +235,10 @@ function setStatus(next) {
         el.querySelector(".txt").textContent = label;
     });
     const online = state === "online";
-    const checking = claim !== null;
-    nameInput.disabled = !online || checking;
-    joinBtn.disabled = !online || checking;
-    joinBtn.textContent = checking ? "Checking..." : "Join chat";
+    const busy = claim !== null || authBusy;
+    authFields.forEach((el) => { el.disabled = !online || busy; });
+    loginBtn.textContent = busy ? "Please wait..." : "Log in";
+    signupBtn.textContent = busy ? "Please wait..." : "Create account";
     msgInput.disabled = !(online && joined);
     sendBtn.disabled = !(online && joined);
     attachBtn.disabled = !(online && joined);
@@ -299,8 +310,8 @@ function connect() {
             resetPeers();
             sendPacket("HELLO", myId, myName, "re");
             addSystem("Reconnected.", current);
-        } else {
-            nameInput.focus();
+        } else if (!loginForm.hidden) {
+            loginUser.focus();
         }
     };
 
@@ -491,7 +502,7 @@ function renderTyping() {
 
 function startClaim(name) {
     claim = { name, timer: setTimeout(finishClaim, CLAIM_MS) };
-    joinError.hidden = true;
+    clearAuthErrors();
     setStatus(state);
     sendPacket("CLAIM", myId, name, "");
 }
@@ -499,13 +510,17 @@ function startClaim(name) {
 function failClaim() {
     clearTimeout(claim.timer);
     claim = null;
+    authToken = "";
     setStatus(state);
-    showJoinError("That username is taken. Try another one.");
+    showAuthError("That account is already online in another tab or device.");
 }
 
-function finishClaim() {
+async function finishClaim() {
     if (!claim) return;
     myName = claim.name;
+    // Bring back the saved chat first, so it is already on screen when the chat opens.
+    await loadHistory();
+    if (!claim) return;
     claim = null;
     joined = true;
     logLine("System", "Username accepted. Joined as " + myName + ".");
@@ -515,6 +530,7 @@ function finishClaim() {
     resetPeers();
     showScreen("chat");
     setStatus(state);
+    renderChannel();
     sendPacket("HELLO", myId, myName, "");
     msgInput.focus();
 }
@@ -1287,20 +1303,117 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------- events ----------
-$("joinForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-    if (claim) return;
-    const name = nameInput.value.trim();
-    if (name.length < 2) return showJoinError("Username needs at least 2 characters.");
-    if (name.indexOf("|") >= 0) return showJoinError("Usernames can't contain |");
-    if (state !== "online") return showJoinError("Not connected yet. Wait for the green dot.");
-    startClaim(name);
+// ---------- accounts ----------
+function showAuthError(text) {
+    const box = loginForm.hidden ? signupError : loginError;
+    box.textContent = text;
+    box.hidden = false;
+}
+
+function clearAuthErrors() {
+    loginError.hidden = true;
+    signupError.hidden = true;
+}
+
+function showAuthTab(which) {
+    const login = which === "login";
+    loginForm.hidden = !login;
+    signupForm.hidden = login;
+    tabLogin.classList.toggle("active", login);
+    tabSignup.classList.toggle("active", !login);
+    tabLogin.setAttribute("aria-selected", login);
+    tabSignup.setAttribute("aria-selected", !login);
+    authTagline.textContent = login ? "Welcome back! Log in to jump in." : "New here? Make an account.";
+    clearAuthErrors();
+    (login ? loginUser : signupUser).focus();
+}
+tabLogin.addEventListener("click", () => showAuthTab("login"));
+tabSignup.addEventListener("click", () => showAuthTab("signup"));
+
+async function callApi(path, options) {
+    let res;
+    try {
+        res = await fetch(API + path, options);
+    } catch (err) {
+        throw new Error("Can't reach the account server. Is it running? (node server/accounts.js)");
+    }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const err = new Error(body.error || "Something went wrong.");
+        err.status = res.status;
+        throw err;
+    }
+    return body;
+}
+
+const postJson = (path, data) => callApi(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + authToken },
+    body: JSON.stringify(data)
 });
 
-function showJoinError(text) {
-    joinError.textContent = text;
-    joinError.hidden = false;
-    nameInput.focus();
+async function authenticate(path, data) {
+    clearAuthErrors();
+    if (state !== "online") return showAuthError("Not connected yet. Wait for the green dot.");
+    authBusy = true;
+    setStatus(state);
+    try {
+        const out = await postJson(path, data);
+        authToken = out.token;
+        authBusy = false;
+        // Account is good. Now make sure nobody is already online under this name.
+        startClaim(out.username);
+    } catch (err) {
+        authBusy = false;
+        setStatus(state);
+        showAuthError(err.message);
+    }
+}
+
+loginForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (claim || authBusy) return;
+    const name = loginUser.value.trim();
+    if (!name || !loginPass.value) return showAuthError("Enter your username and password.");
+    authenticate("/api/login", { username: name, password: loginPass.value });
+});
+
+signupForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (claim || authBusy) return;
+    const name = signupUser.value.trim();
+    if (name.length < 2) return showAuthError("Username needs at least 2 characters.");
+    if (name.indexOf("|") >= 0) return showAuthError("Usernames can't contain |");
+    if (!signupPass.value) return showAuthError("Please choose a password.");
+    if (signupPass.value !== signupConfirm.value) return showAuthError("Passwords don't match.");
+    authenticate("/api/signup", { username: name, password: signupPass.value, confirm: signupConfirm.value });
+});
+
+$("logoutBtn").addEventListener("click", () => location.reload());   // pagehide tells everyone we left
+
+// ---------- saved chat ----------
+// Past messages come from database/chatlogs.js (through the accounts server).
+// Items get the id "h:<name>" so grouping works; messages from you count as yours.
+async function loadHistory() {
+    try {
+        const all = await callApi("/api/history", { headers: { Authorization: "Bearer " + authToken } });
+        CHANNELS.forEach((c) => {
+            const box = store[c.id];
+            box.items = (all[c.id] || []).map((m) => ({
+                kind: "msg", id: same(m.user, myName) ? myId : "h:" + m.user.toLowerCase(),
+                name: m.user, text: m.text, ts: m.ts, mention: false
+            }));
+        });
+    } catch (err) {
+        logLine("System", "Couldn't load saved chat: " + err.message);
+    }
+}
+
+function saveMessage(ch, text) {
+    postJson("/api/messages", { channel: ch, text }).catch((err) => {
+        logLine("System", "Message not saved: " + err.message);
+        if (err.status === 401) addSystem("Your login expired, so new messages aren't being saved. Log out and back in.", ch);
+    });
 }
 
 $("chatForm").addEventListener("submit", (e) => {
@@ -1308,6 +1421,7 @@ $("chatForm").addEventListener("submit", (e) => {
     const text = msgInput.value.trim();
     if (!text || !joined) return;
     if (sendPacket("MSG", myId, myName, current + "|" + text)) {
+        saveMessage(current, text);
         msgInput.value = "";
         drafts[current] = "";
         cancelTyping();
@@ -1319,4 +1433,4 @@ buildChannelList();
 renderChannelHeader();
 updateBadges();
 renderChannel();
-connect();
+connect();

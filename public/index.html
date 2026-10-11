@@ -30,17 +30,43 @@
             </svg>
 
             <h1 class="logo">Chatterbox</h1>
-            <p class="tagline">Pick a name and jump in.</p>
+            <p id="authTagline" class="tagline">Welcome back! Log in to jump in.</p>
 
-            <form id="joinForm" autocomplete="off">
-                <label for="nameInput">Username</label>
-                <input id="nameInput" class="field" type="text" maxlength="16" placeholder="e.g. PixelPanda" disabled>
-                <p class="hint">2 to 16 characters. The | symbol is not allowed.</p>
-                <p id="joinError" class="error" role="alert" hidden></p>
+            <div class="auth-tabs" role="tablist">
+                <button id="tabLogin" class="auth-tab active" type="button" role="tab" aria-selected="true">Log in</button>
+                <button id="tabSignup" class="auth-tab" type="button" role="tab" aria-selected="false">Sign up</button>
+            </div>
 
+            <!-- Log in -->
+            <form id="loginForm" autocomplete="off">
+                <label for="loginUser">Username</label>
+                <input id="loginUser" class="field" type="text" maxlength="16" placeholder="Your username" disabled>
+
+                <label for="loginPass" class="gap">Password</label>
+                <input id="loginPass" class="field" type="password" placeholder="Your password" disabled>
+
+                <p id="loginError" class="error" role="alert" hidden></p>
                 <div class="join-actions">
                     <span id="joinStatus" class="pill" data-state="connecting"><span class="dot"></span><span class="txt">Connecting</span></span>
-                    <button id="joinBtn" class="btn blue" type="submit" disabled>Join chat</button>
+                    <button id="loginBtn" class="btn blue" type="submit" disabled>Log in</button>
+                </div>
+            </form>
+
+            <!-- Sign up -->
+            <form id="signupForm" autocomplete="off" hidden>
+                <label for="signupUser">Username</label>
+                <input id="signupUser" class="field" type="text" maxlength="16" placeholder="e.g. PixelPanda" disabled>
+                <p class="hint">2 to 16 characters. The | symbol is not allowed.</p>
+
+                <label for="signupPass" class="gap">Password</label>
+                <input id="signupPass" class="field" type="password" placeholder="Pick a password" disabled>
+
+                <label for="signupConfirm" class="gap">Confirm password</label>
+                <input id="signupConfirm" class="field" type="password" placeholder="Type it again" disabled>
+
+                <p id="signupError" class="error" role="alert" hidden></p>
+                <div class="join-actions">
+                    <button id="signupBtn" class="btn blue" type="submit" disabled>Create account</button>
                 </div>
             </form>
         </section>
@@ -60,6 +86,7 @@
                     <b id="meName"></b>
                     <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span class="txt">Connecting</span></span>
                 </div>
+                <button id="logoutBtn" class="btn small" type="button" title="Log out">Log out</button>
             </div>
         </nav>
 
@@ -131,4 +158,4 @@
     <script src="app.js"></script>
 </body>
 
-</html>
+</html>

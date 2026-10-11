@@ -4,7 +4,8 @@
     "description": "Chatterbox - a Bonezegei WebSocket chat app",
     "main": "app.bzg",
     "scripts": {
-        "start": "bonezegei app.bzg"
+        "start": "bonezegei app.bzg",
+        "accounts": "node server/accounts.js"
     },
     "dependencies": {
         "http": "^1.0.0"
