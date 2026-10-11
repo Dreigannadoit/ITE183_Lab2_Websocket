@@ -268,7 +268,7 @@
         .usercard .dot { width: 11px; height: 11px; border-width: 2px; }
 
         /* middle: chat */
-        .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
         .chanbar {
             flex: none;
@@ -286,6 +286,8 @@
         .chanbar .topic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 12px; border-left: 3px solid var(--ink); font-size: 14px; color: #5b5273; }
         .chanbar .spacer { flex: 1; }
         .nav-btn { display: none; }
+        .btn.attach { flex: none; display: grid; place-items: center; padding: 6px 12px 8px; background: var(--sky); }
+        .btn.attach svg { display: block; }
 
         .log {
             flex: 1;
@@ -416,8 +418,110 @@
         }
         .typing small { padding-left: 6px; font-size: 13px; font-weight: 800; color: #5b5273; }
 
+        /* pictures */
+        .pic-bubble { padding: 6px; }
+        .pic {
+            position: relative;
+            display: block;
+            margin: 0;
+            overflow: hidden;
+            background: var(--paper);
+            border: 3px solid var(--ink);
+            border-radius: 12px;
+            max-width: 100%;
+        }
+        .pic[data-state="ready"] { cursor: zoom-in; }
+        .pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
+        .pic-load {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background-color: var(--yellow);
+            background-image: linear-gradient(135deg, rgba(255, 255, 255, .45) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .45) 50%, rgba(255, 255, 255, .45) 75%, transparent 75%);
+            background-size: 40px 40px;
+            animation: stripes .9s linear infinite;
+        }
+        @keyframes stripes { to { background-position: 40px 0; } }
+        .pic[data-state="ready"] .pic-load { display: none; }
+        .pic[data-state="unloaded"] .pic-load { animation: none; }
+        .pic[data-state="failed"] .pic-load { background-color: var(--pink); background-image: none; animation: none; }
+        .pic[data-state="expired"] .pic-load { background-color: #E3DCC8; background-image: none; animation: none; }
+        .pic-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            padding: 5px 14px 6px;
+            font-size: 14px;
+            font-weight: 800;
+            text-align: center;
+            color: var(--ink);
+            background: var(--white);
+            border: 3px solid var(--ink);
+            border-radius: 999px;
+            box-shadow: 0 4px 0 var(--ink);
+        }
+        .pic-dots { display: inline-flex; gap: 4px; }
+        .pic-dots i {
+            width: 9px;
+            height: 9px;
+            border: 2px solid var(--ink);
+            border-radius: 50%;
+            background: var(--blue);
+            animation: dotbounce 1s ease-in-out infinite;
+        }
+        .pic-dots i:nth-child(2) { background: var(--pink); animation-delay: .15s; }
+        .pic-dots i:nth-child(3) { background: var(--green); animation-delay: .3s; }
+        .pic[data-state="failed"] .pic-dots i, .pic[data-state="expired"] .pic-dots i { animation: none; background: var(--white); }
+        .pic-bar { display: none; width: min(70%, 220px); height: 16px; background: var(--white); border: 3px solid var(--ink); border-radius: 999px; overflow: hidden; box-shadow: 0 3px 0 var(--ink); }
+        .pic-bar b { display: block; width: 0; height: 100%; background: var(--blue); transition: width .12s linear; }
+        .pic[data-state="transfer"] .pic-bar { display: block; }
+
+        .drop-hint {
+            position: absolute;
+            inset: 10px;
+            z-index: 5;
+            display: grid;
+            place-items: center;
+            font-family: var(--display);
+            font-size: 28px;
+            text-align: center;
+            padding: 20px;
+            color: var(--ink);
+            background: rgba(255, 210, 63, .88);
+            border: 5px dashed var(--ink);
+            border-radius: 28px;
+            pointer-events: none;
+        }
+        .drop-hint[hidden] { display: none; }
+
+        .lightbox {
+            position: fixed;
+            inset: 0;
+            z-index: 40;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: rgba(27, 18, 48, .82);
+            cursor: zoom-out;
+        }
+        .lightbox[hidden] { display: none; }
+        .lightbox img {
+            max-width: 92vw;
+            max-height: 82vh;
+            background: var(--white);
+            border: 5px solid var(--ink);
+            border-radius: 16px;
+            box-shadow: 8px 8px 0 var(--ink);
+        }
+        .lightbox .btn { position: absolute; top: 16px; right: 16px; }
+
         .composer {
             flex: none;
+            align-items: center;
             display: flex;
             gap: 12px;
             padding: 14px 16px 18px;
@@ -642,7 +746,17 @@
                 </div>
             </div>
 
+            <div id="dropHint" class="drop-hint" hidden>Drop a picture to send it</div>
+
             <form id="chatForm" class="composer" autocomplete="off">
+                <button id="attachBtn" class="btn attach" type="button" aria-label="Send a picture" title="Send a picture (you can also paste or drop one)" disabled>
+                    <svg viewBox="0 0 28 28" width="28" height="28" aria-hidden="true">
+                        <rect x="3" y="5" width="22" height="18" rx="4" fill="#fff" stroke="#1B1230" stroke-width="2.5" />
+                        <circle cx="10" cy="11" r="2.6" fill="#FFD23F" stroke="#1B1230" stroke-width="1.6" />
+                        <path d="M5 21 L12 14 L16 18 L19 15 L24 21 Z" fill="#35D07F" stroke="#1B1230" stroke-width="2" stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <input id="fileInput" type="file" accept="image/*" multiple hidden>
                 <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Message #general" maxlength="300" disabled>
                 <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
             </form>
@@ -654,6 +768,11 @@
         </aside>
 
         <div id="scrim" class="scrim"></div>
+    </div>
+
+    <div id="lightbox" class="lightbox" hidden>
+        <button id="lbClose" class="btn small" type="button">Close</button>
+        <img id="lbImg" alt="Picture preview">
     </div>
 
     <!-- ===================== CONSOLE ===================== -->
@@ -685,6 +804,18 @@
         const TYPING_TTL_MS = 5000;     // hide someone's dots if we hear nothing for this long
         const GROUP_MS = 5 * 60 * 1000; // messages from one person within 5 minutes are grouped
 
+        // Pictures. If pictures never arrive on your server, lower CHUNK_CHARS (try 800, then 400).
+        const MAX_DIM = 1024;                     // longest side of a sent picture, in pixels
+        const MAX_IMG_BYTES = 160 * 1024;         // a sent picture is squeezed to fit under this
+        const MAX_RECV_BYTES = 400 * 1024;        // refuse bigger incoming pictures
+        const CHUNK_CHARS = 1500;                 // size of one packet of picture data
+        const CHUNK_PACKET_DELAY_MS = 5;          // short pause every few packets, to be gentle on the server
+        const TRANSFER_TIMEOUT_MS = 15000;        // give up on a picture if nothing arrives for this long
+        const MAX_STORE_BYTES = 40 * 1024 * 1024; // pictures kept in memory; the oldest are dropped past this
+        const MIN_LOADING_MS = 350;               // so the loading animation is visible when a picture reloads
+        const HIDDEN_UNLOAD_MS = 5000;            // free pictures when the tab has been hidden this long
+        const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
         // The channels are fixed. Add or rename them here.
         const CHANNELS = [
             { id: "general", topic: "Say hi and hang out" },
@@ -703,11 +834,13 @@
         const chanNameEl = $("chanName"), chanTopicEl = $("chanTopic");
         const welcomeEl = $("welcome"), welcomeTitle = $("welcomeTitle"), welcomeText = $("welcomeText");
         const typingEl = $("typing"), typingText = $("typingText");
+        const attachBtn = $("attachBtn"), fileInput = $("fileInput"), dropHint = $("dropHint");
+        const lightbox = $("lightbox"), lbImg = $("lbImg");
         const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 
         // ---------- console (shows what travels over the socket) ----------
-        const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING"];
-        const QUIET_TYPES = ["TYPING"];   // packets too chatty to list in the console
+        const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING", "IMGH", "IMGC"];
+        const QUIET_TYPES = ["TYPING", "IMGC"];   // packets too chatty to list in the console
         let warnedUnknown = false;
         const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
@@ -887,6 +1020,7 @@
             joinBtn.textContent = checking ? "Checking..." : "Join chat";
             msgInput.disabled = !(online && joined);
             sendBtn.disabled = !(online && joined);
+            attachBtn.disabled = !(online && joined);
         }
 
         // Every packet looks like  TYPE|id|name|payload
@@ -903,6 +1037,10 @@
                     if (m.type === "MSG") {
                         const msg = splitPayload(m.payload);
                         logLine("Client", "#" + msg.ch + " " + msg.text);
+                    } else if (m.type === "IMGH") {
+                        const hd = splitPayload(m.payload);
+                        const f = hd.text.split("|");
+                        logLine("Client", "#" + hd.ch + " picture, " + Math.round(f[3] / 1024) + " KB in " + f[1] + " packets");
                     } else {
                         logLine("Client", text);
                     }
@@ -969,6 +1107,9 @@
                     if (m.type === "MSG") {
                         const msg = splitPayload(m.payload);
                         logLine("Server", m.name + " says in #" + msg.ch + ": " + msg.text);
+                    } else if (m.type === "IMGH") {
+                        const hd = splitPayload(m.payload);
+                        logLine("Server", m.name + " sent a picture in #" + hd.ch + " (" + Math.round(hd.text.split("|")[3] / 1024) + " KB)");
                     } else {
                         logLine("Server", data);
                     }
@@ -1040,6 +1181,10 @@
                 clearTyper(m.id);
                 addPeer(m.id, m.name);
                 receiveMessage(msg.ch, m.id, m.name, msg.text);
+            } else if (m.type === "IMGH") {
+                onImageHeader(m);
+            } else if (m.type === "IMGC") {
+                onImageChunk(m);
             }
         }
 
@@ -1268,6 +1413,7 @@
         }
 
         function renderChannel() {
+            unloadAllPics();   // the old channel's pictures leave the screen: free them
             const items = store[current].items;
             const nodes = [];
             items.forEach((item, i) => buildNodes(item, items[i - 1]).forEach((n) => nodes.push(n)));
@@ -1380,10 +1526,14 @@
                 content.append(meta);
             }
 
-            const bubble = document.createElement("div");
-            bubble.className = "bubble";
-            appendText(bubble, item.text);
-            content.append(bubble);
+            if (item.kind === "img") {
+                content.append(makeImageBubble(item));
+            } else {
+                const bubble = document.createElement("div");
+                bubble.className = "bubble";
+                appendText(bubble, item.text);
+                content.append(bubble);
+            }
 
             row.append(gutter, content);
             return row;
@@ -1398,7 +1548,7 @@
                 nodes.push(makeSystem(item));
                 return nodes;
             }
-            const grouped = !newDay && prev.kind === "msg" && prev.id === item.id && item.ts - prev.ts < GROUP_MS;
+            const grouped = !newDay && prev.kind !== "sys" && prev.id === item.id && item.ts - prev.ts < GROUP_MS;
             nodes.push(makeMessage(item, grouped));
             return nodes;
         }
@@ -1408,7 +1558,7 @@
             const prev = box.items[box.items.length - 1];
             box.items.push(item);
             if (box.items.length > 500) {
-                box.items.splice(0, 100);
+                box.items.splice(0, 100).forEach(forgetItem);
                 if (ch === current) renderChannel();
                 return;
             }
@@ -1426,12 +1576,437 @@
             const mine = id === myId;
             const mention = !mine && mentionsMe(text);
             addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention });
-            if (!mine && ch !== current) {
-                store[ch].unread++;
-                if (mention) store[ch].mentions++;
-                updateBadges();
+            if (!mine) noteUnread(ch, mention);
+        }
+
+        function noteUnread(ch, mention) {
+            if (ch === current) return;
+            store[ch].unread++;
+            if (mention) store[ch].mentions++;
+            updateBadges();
+        }
+
+        // ---------- pictures ----------
+        // A picture travels as one header packet and many small data packets:
+        //   IMGH|id|name|channel|picId|packets|mime|bytes|width|height
+        //   IMGC|id|name|picId|index|base64data
+        const images = new Map();    // picId -> item (every picture we know about)
+        const incoming = new Map();  // picId -> { item, parts, got, total, timer }  (still arriving)
+        const liveUrls = new Map();  // picId -> object URL of a picture currently on screen
+        let storedBytes = 0;
+        let hiddenTimer = null;
+
+        const picObserver = window.IntersectionObserver
+            ? new IntersectionObserver((entries) => {
+                entries.forEach((e) => { if (e.isIntersecting) showPic(e.target); else hidePic(e.target); });
+            }, { root: logEl, rootMargin: "250px 0px" })
+            : null;
+
+        const newPicId = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+
+        function fitSize(w, h) {
+            const scale = Math.min(1, 360 / w, 380 / h);
+            return Math.round(w * scale);
+        }
+
+        function makeImageBubble(item) {
+            const bubble = document.createElement("div");
+            bubble.className = "bubble pic-bubble";
+
+            const fig = document.createElement("figure");
+            fig.className = "pic";
+            fig.dataset.img = item.imgId;
+            fig.style.width = fitSize(item.w, item.h) + "px";
+            fig.style.aspectRatio = item.w + " / " + item.h;
+
+            const img = document.createElement("img");
+            img.alt = "Picture from " + item.name;
+            img.decoding = "async";
+            img.draggable = false;
+
+            // The animated placeholder shown while a picture arrives or (re)loads.
+            const load = document.createElement("div");
+            load.className = "pic-load";
+            const chip = document.createElement("span");
+            chip.className = "pic-chip";
+            const dots = document.createElement("span");
+            dots.className = "pic-dots";
+            dots.innerHTML = "<i></i><i></i><i></i>";
+            const label = document.createElement("span");
+            label.className = "pic-label";
+            chip.append(dots, label);
+            const bar = document.createElement("span");
+            bar.className = "pic-bar";
+            bar.innerHTML = "<b></b>";
+            load.append(chip, bar);
+
+            fig.append(img, load);
+            fig.addEventListener("click", () => { if (fig.dataset.state === "ready") openLightbox(item); });
+            bubble.append(fig);
+
+            applyPicState(fig, item);
+            return bubble;
+        }
+
+        function setPicState(fig, state, text) {
+            fig.dataset.state = state;
+            fig.querySelector(".pic-label").textContent = text;
+        }
+
+        // Make a picture's box match its item (called when it is built and whenever the item changes).
+        function applyPicState(fig, item) {
+            const pct = Math.round(item.progress * 100);
+            if (item.status === "receiving" || item.status === "sending") {
+                setPicState(fig, "transfer", (item.status === "sending" ? "Sending " : "Receiving ") + pct + "%");
+                fig.querySelector(".pic-bar b").style.width = pct + "%";
+            } else if (item.status === "failed") {
+                dropSrc(fig);
+                setPicState(fig, "failed", item.failText || "Picture didn't arrive");
+            } else if (item.status === "expired") {
+                dropSrc(fig);
+                setPicState(fig, "expired", "Removed to save memory");
+            } else if (item.status === "ready") {
+                if (!fig.querySelector("img").getAttribute("src")) setPicState(fig, "unloaded", "Loading...");
+                requestLoad(fig);
             }
         }
+
+        function updatePicUI(item) {
+            const fig = logEl.querySelector('[data-img="' + item.imgId + '"]');
+            if (fig) applyPicState(fig, item);
+        }
+
+        // Ask for a picture to be loaded if it is on screen. The observer answers
+        // straight away, then again whenever the picture scrolls in or out.
+        function requestLoad(fig) {
+            if (picObserver) {
+                picObserver.unobserve(fig);
+                picObserver.observe(fig);
+            } else {
+                showPic(fig);
+            }
+        }
+
+        function releaseUrl(picId) {
+            const url = liveUrls.get(picId);
+            if (url) { URL.revokeObjectURL(url); liveUrls.delete(picId); }
+        }
+
+        function dropSrc(fig) {
+            const img = fig.querySelector("img");
+            if (img.getAttribute("src")) {
+                img.onload = null;
+                img.onerror = null;
+                img.removeAttribute("src");
+            }
+            releaseUrl(fig.dataset.img);
+        }
+
+        // On screen (or about to be): put the picture in memory and show it.
+        function showPic(fig) {
+            const item = images.get(fig.dataset.img);
+            if (!item || item.status !== "ready" || !item.blob) return;
+            const img = fig.querySelector("img");
+            if (img.getAttribute("src")) return;   // already loaded or loading
+
+            const url = URL.createObjectURL(item.blob);
+            liveUrls.set(item.imgId, url);
+            setPicState(fig, "loading", "Loading...");
+            const started = Date.now();
+            img.onload = () => {
+                const wait = Math.max(0, MIN_LOADING_MS - (Date.now() - started));
+                setTimeout(() => {
+                    if (img.getAttribute("src") === url) setPicState(fig, "ready", "");
+                }, wait);
+            };
+            img.onerror = () => setPicState(fig, "failed", "Couldn't show this picture");
+            img.src = url;
+        }
+
+        // Off screen: let go of the decoded picture. It reloads when you scroll back to it.
+        function hidePic(fig) {
+            const img = fig.querySelector("img");
+            if (!img.getAttribute("src")) return;
+            dropSrc(fig);
+            setPicState(fig, "unloaded", "Loading...");
+        }
+
+        function unloadAllPics() {
+            if (picObserver) picObserver.disconnect();
+            liveUrls.forEach((url) => URL.revokeObjectURL(url));
+            liveUrls.clear();
+        }
+
+        // Forget the oldest pictures if memory use grows too large.
+        function trimPictures() {
+            if (storedBytes <= MAX_STORE_BYTES) return;
+            const old = Array.from(images.values()).filter((it) => it.blob).sort((a, b) => a.ts - b.ts);
+            for (const it of old) {
+                if (storedBytes <= MAX_STORE_BYTES) break;
+                storedBytes -= it.blob.size;
+                it.blob = null;
+                it.status = "expired";
+                releaseUrl(it.imgId);
+                updatePicUI(it);
+            }
+        }
+
+        // A message scrolled out of the 500-message history.
+        function forgetItem(item) {
+            if (!item.imgId) return;
+            const tr = incoming.get(item.imgId);
+            if (tr) { clearTimeout(tr.timer); incoming.delete(item.imgId); }
+            if (item.blob) storedBytes -= item.blob.size;
+            images.delete(item.imgId);
+            releaseUrl(item.imgId);
+        }
+
+        // Free every picture while the tab is hidden; bring the visible ones back afterwards.
+        document.addEventListener("visibilitychange", () => {
+            clearTimeout(hiddenTimer);
+            if (document.hidden) {
+                hiddenTimer = setTimeout(() => logEl.querySelectorAll(".pic").forEach(hidePic), HIDDEN_UNLOAD_MS);
+            } else {
+                logEl.querySelectorAll(".pic").forEach(requestLoad);
+            }
+        });
+
+        // ----- receiving -----
+        function onImageHeader(m) {
+            if (m.id === myId) return;                       // our own picture comes back to us: ignore
+            const hd = splitPayload(m.payload);
+            const f = hd.text.split("|");                    // picId, packets, mime, bytes, width, height
+            const picId = f[0], total = +f[1], mime = f[2], size = +f[3], w = +f[4], h = +f[5];
+            const sane = picId && images.has(picId) === false &&
+                total >= 1 && total <= 2000 && size > 0 && size <= MAX_RECV_BYTES &&
+                IMAGE_TYPES.indexOf(mime) >= 0 && w >= 1 && h >= 1 && w <= 8192 && h <= 8192;
+            if (!sane) return;
+
+            const item = { kind: "img", id: m.id, name: m.name, ts: Date.now(), imgId: picId, mime, size, w, h,
+                           status: "receiving", progress: 0, blob: null };
+            images.set(picId, item);
+            incoming.set(picId, { item, parts: new Array(total), got: 0, total,
+                                  timer: setTimeout(() => failPicture(picId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) });
+            clearTyper(m.id);
+            addPeer(m.id, m.name);
+            addItem(hd.ch, item);
+            noteUnread(hd.ch, false);
+        }
+
+        function onImageChunk(m) {
+            if (m.id === myId) return;
+            const k1 = m.payload.indexOf("|");
+            const k2 = m.payload.indexOf("|", k1 + 1);
+            if (k1 < 1 || k2 < 0) return;
+            const tr = incoming.get(m.payload.slice(0, k1));
+            if (!tr) return;                                 // we joined mid-transfer: skip it
+            const index = +m.payload.slice(k1 + 1, k2);
+            if (!(index >= 0 && index < tr.total) || tr.parts[index] !== undefined) return;
+
+            tr.parts[index] = m.payload.slice(k2 + 1);
+            tr.got++;
+            tr.item.progress = tr.got / tr.total;
+            clearTimeout(tr.timer);
+            tr.timer = setTimeout(() => failPicture(tr.item.imgId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS);
+
+            if (tr.got < tr.total) {
+                updatePicUI(tr.item);
+            } else {
+                clearTimeout(tr.timer);
+                incoming.delete(tr.item.imgId);
+                try {
+                    const blob = base64ToBlob(tr.parts.join(""), tr.item.mime);
+                    if (blob.size !== tr.item.size) throw new Error("size mismatch");
+                    completePicture(tr.item, blob);
+                } catch (err) {
+                    failPicture(tr.item.imgId, "Picture arrived damaged");
+                }
+            }
+        }
+
+        function completePicture(item, blob) {
+            item.blob = blob;
+            item.progress = 1;
+            item.status = "ready";
+            storedBytes += blob.size;
+            updatePicUI(item);
+            trimPictures();
+        }
+
+        function failPicture(picId, text) {
+            const tr = incoming.get(picId);
+            if (tr) { clearTimeout(tr.timer); incoming.delete(picId); }
+            const item = images.get(picId);
+            if (!item) return;
+            item.status = "failed";
+            item.failText = text;
+            updatePicUI(item);
+        }
+
+        function base64ToBlob(b64, mime) {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Blob([bytes], { type: mime });
+        }
+
+        const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(String(r.result).split(",")[1] || "");
+            r.onerror = () => reject(new Error("Couldn't read that picture."));
+            r.readAsDataURL(blob);
+        });
+
+        // ----- sending -----
+        async function decodeImage(file) {
+            if (window.createImageBitmap) {
+                try { return await createImageBitmap(file); } catch (err) { /* fall back to <img> */ }
+            }
+            return new Promise((resolve, reject) => {
+                const url = URL.createObjectURL(file);
+                const img = new Image();
+                img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+                img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that picture.")); };
+                img.src = url;
+            });
+        }
+
+        // Shrink and compress so a picture is a few dozen packets, not thousands.
+        async function prepareImage(file) {
+            if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
+            const src = await decodeImage(file);
+            const sw = src.naturalWidth || src.width;
+            const sh = src.naturalHeight || src.height;
+            if (!sw || !sh) throw new Error("Couldn't read that picture.");
+
+            // Small GIFs are sent as they are, so they keep moving.
+            if (file.type === "image/gif" && file.size <= MAX_IMG_BYTES) {
+                return { blob: file, w: sw, h: sh, mime: "image/gif" };
+            }
+
+            let scale = Math.min(1, MAX_DIM / Math.max(sw, sh));
+            let quality = 0.82;
+            for (let attempt = 0; attempt < 8; attempt++) {
+                const w = Math.max(1, Math.round(sw * scale));
+                const h = Math.max(1, Math.round(sh * scale));
+                const canvas = document.createElement("canvas");
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext("2d");
+                ctx.fillStyle = "#fff";
+                ctx.fillRect(0, 0, w, h);
+                ctx.drawImage(src, 0, 0, w, h);
+                const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+                if (!blob) throw new Error("Couldn't process that picture.");
+                if (blob.size <= MAX_IMG_BYTES) return { blob, w, h, mime: "image/jpeg" };
+                if (quality > 0.5) quality -= 0.12; else scale *= 0.8;
+            }
+            throw new Error("That picture is too detailed to send. Try a smaller one.");
+        }
+
+        const sendQueue = [];
+        let sendingNow = false;
+
+        function queueImage(file) {
+            if (!joined || state !== "online") { addSystem("Connect first, then send your picture.", current); return; }
+            sendQueue.push({ file, ch: current });
+            if (!sendingNow) runSendQueue();
+        }
+
+        async function runSendQueue() {
+            sendingNow = true;
+            while (sendQueue.length) {
+                const job = sendQueue.shift();
+                try {
+                    await sendImage(job.file, job.ch);
+                } catch (err) {
+                    addSystem("Couldn't send that picture: " + err.message, job.ch);
+                }
+            }
+            sendingNow = false;
+        }
+
+        async function sendImage(file, ch) {
+            const pic = await prepareImage(file);
+            const data = await blobToBase64(pic.blob);
+            const parts = [];
+            for (let i = 0; i < data.length; i += CHUNK_CHARS) parts.push(data.slice(i, i + CHUNK_CHARS));
+
+            const picId = newPicId();
+            const item = { kind: "img", id: myId, name: myName, ts: Date.now(), imgId: picId, mime: pic.mime,
+                           size: pic.blob.size, w: pic.w, h: pic.h, status: "sending", progress: 0, blob: pic.blob };
+            images.set(picId, item);
+            storedBytes += pic.blob.size;
+            addItem(ch, item);
+
+            try {
+                const header = [ch, picId, parts.length, pic.mime, pic.blob.size, pic.w, pic.h].join("|");
+                if (!sendPacket("IMGH", myId, myName, header)) throw new Error("Not connected.");
+                for (let i = 0; i < parts.length; i++) {
+                    while (socket && socket.bufferedAmount > 256 * 1024) await sleep(20);
+                    if (!sendPacket("IMGC", myId, myName, picId + "|" + i + "|" + parts[i])) throw new Error("Connection lost while sending.");
+                    item.progress = (i + 1) / parts.length;
+                    if (i % 3 === 2) { updatePicUI(item); await sleep(CHUNK_PACKET_DELAY_MS); }
+                }
+            } catch (err) {
+                item.status = "failed";
+                item.failText = "Couldn't send";
+                updatePicUI(item);
+                throw err;
+            }
+            item.progress = 1;
+            item.status = "ready";
+            updatePicUI(item);
+            trimPictures();
+        }
+
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+        // ----- viewing -----
+        let lbUrl = null;
+        function openLightbox(item) {
+            if (!item.blob) return;
+            closeLightbox();
+            lbUrl = URL.createObjectURL(item.blob);
+            lbImg.src = lbUrl;
+            lightbox.hidden = false;
+        }
+        function closeLightbox() {
+            if (lightbox.hidden) return;
+            lightbox.hidden = true;
+            lbImg.removeAttribute("src");
+            if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = null; }
+        }
+        lightbox.addEventListener("click", closeLightbox);
+
+        // ----- ways to pick a picture -----
+        attachBtn.addEventListener("click", () => fileInput.click());
+        fileInput.addEventListener("change", () => {
+            Array.from(fileInput.files).forEach(queueImage);
+            fileInput.value = "";
+        });
+
+        msgInput.addEventListener("paste", (e) => {
+            const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter((f) => /^image\//.test(f.type));
+            if (files.length) {
+                e.preventDefault();
+                files.forEach(queueImage);
+            }
+        });
+
+        let dragDepth = 0;
+        const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf("Files") >= 0;
+        const mainEl = chatScreen.querySelector(".main");
+        mainEl.addEventListener("dragenter", (e) => { if (hasFiles(e)) { e.preventDefault(); dragDepth++; dropHint.hidden = false; } });
+        mainEl.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+        mainEl.addEventListener("dragleave", (e) => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; dropHint.hidden = true; } });
+        mainEl.addEventListener("drop", (e) => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            dragDepth = 0;
+            dropHint.hidden = true;
+            Array.from(e.dataTransfer.files).filter((f) => /^image\//.test(f.type)).forEach(queueImage);
+        });
 
         // ---------- members ----------
         function insertMention(name) {
@@ -1491,7 +2066,7 @@
         whoBtn.addEventListener("click", () => toggleDrawer(panel, whoBtn));
         scrim.addEventListener("click", closeDrawers);
         document.addEventListener("keydown", (e) => {
-            if (e.key === "Escape") closeDrawers();
+            if (e.key === "Escape") { closeDrawers(); closeLightbox(); }
             // Alt + Up/Down jumps between channels
             if (joined && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
                 e.preventDefault();
