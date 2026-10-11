@@ -1,9 +1,7 @@
 // Chatterbox client. Loaded by index.html (must come after the page markup).
 
 // ---------- connection ----------
-// Accounts + chat history live in server/accounts.js (a separate small Node server).
-const API_PORT = 8001;
-const API = (location.protocol.indexOf("http") === 0 ? location.protocol + "//" + location.hostname : "http://localhost") + ":" + API_PORT;
+// Accounts and chat history are handled by the server (app.bzg) over this same WebSocket.
 
 const wsUrl = location.protocol.indexOf("http") === 0
     ? (location.protocol === "https:" ? "wss://" : "ws://") + location.host
@@ -59,7 +57,10 @@ const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = 
 
 // ---------- console (shows what travels over the socket) ----------
 const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING", "IMGH", "IMGC"];
-const QUIET_TYPES = ["TYPING", "IMGC"];   // packets too chatty to list in the console
+// Packets too chatty (or too private, like passwords) to list in the console.
+const QUIET_TYPES = ["TYPING", "IMGC", "SIGNUP", "LOGIN", "SAVE", "HISTORY", "HIST", "HISTEND", "AUTHOK", "AUTHERR", "SAVEERR"];
+const HISTORY_WAIT_MS = 5000;      // how long we wait for saved chat before joining anyway
+const AUTH_WAIT_MS = 5000;         // how long we wait for log in / sign up to be answered
 let warnedUnknown = false;
 const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
@@ -217,7 +218,10 @@ let state = "connecting";
 let joined = false;
 let myName = "";
 let claim = null;            // { name, timer } while we wait to see if a name is free
-let authToken = "";          // proves to the accounts server who we are
+let authTimer = null;        // gives up if the server never answers log in / sign up
+let historyBuf = null;       // saved messages arriving from the server: channel id -> [msg]
+let historyDone = null;      // called when the last saved message has arrived
+let historyTimer = null;
 let authBusy = false;        // true while a log in / sign up request is running
 const peers = new Map();     // id -> { name, seen }
 const typers = new Map();    // id -> { name, ch, timer }  (people typing right now)
@@ -331,6 +335,7 @@ function connect() {
         if (wrapped) data = wrapped[1];
 
         const m = parse(data);
+        if (handleServerReply(m)) return;
         if (QUIET_TYPES.indexOf(m.type) < 0) {
             if (m.type === "MSG") {
                 const msg = splitPayload(m.payload);
@@ -355,6 +360,8 @@ function connect() {
 
     socket.onclose = () => {
         if (claim) { clearTimeout(claim.timer); claim = null; }
+        if (authBusy) failAuth("Connection lost. Try again in a moment.");
+        if (historyDone) finishHistory();
         cancelTyping();
         clearAllTypers();
         setStatus("offline");
@@ -517,7 +524,6 @@ function startClaim(name) {
 function failClaim() {
     clearTimeout(claim.timer);
     claim = null;
-    authToken = "";
     setStatus(state);
     showAuthError("That account is already online in another tab or device.");
 }
@@ -1337,44 +1343,59 @@ function showAuthTab(which) {
 tabLogin.addEventListener("click", () => showAuthTab("login"));
 tabSignup.addEventListener("click", () => showAuthTab("signup"));
 
-async function callApi(path, options) {
-    let res;
-    try {
-        res = await fetch(API + path, options);
-    } catch (err) {
-        throw new Error("Can't reach the account server. Is it running? (node server/accounts.js)");
-    }
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const err = new Error(body.error || "Something went wrong.");
-        err.status = res.status;
-        throw err;
-    }
-    return body;
-}
-
-const postJson = (path, data) => callApi(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + authToken },
-    body: JSON.stringify(data)
-});
-
-async function authenticate(path, data) {
+// Log in / sign up are sent to the server (app.bzg) as packets and answered with
+// AUTHOK (you're in) or AUTHERR (with the reason).
+function authenticate(type, name, password) {
     clearAuthErrors();
     if (state !== "online") return showAuthError("Not connected yet. Wait for the green dot.");
     authBusy = true;
     setStatus(state);
-    try {
-        const out = await postJson(path, data);
-        authToken = out.token;
+    clearTimeout(authTimer);
+    authTimer = setTimeout(() => failAuth("The server didn't answer. Is app.bzg running?"), AUTH_WAIT_MS);
+    if (!sendPacket(type, myId, name, password)) failAuth("Not connected yet. Wait for the green dot.");
+}
+
+function failAuth(text) {
+    clearTimeout(authTimer);
+    authBusy = false;
+    setStatus(state);
+    showAuthError(text);
+}
+
+// Messages the server sends to this tab only (not part of the live chat).
+// Returns true when it handled the packet.
+function handleServerReply(m) {
+    if (m.id !== myId) return false;
+    if (m.type === "AUTHOK") {
+        clearTimeout(authTimer);
         authBusy = false;
         // Account is good. Now make sure nobody is already online under this name.
-        startClaim(out.username);
-    } catch (err) {
-        authBusy = false;
-        setStatus(state);
-        showAuthError(err.message);
+        startClaim(m.name);
+        return true;
     }
+    if (m.type === "AUTHERR") {
+        failAuth(m.name);
+        return true;
+    }
+    if (m.type === "HIST") {
+        // name = who wrote it, payload = channel|timestamp|text
+        const a = splitPayload(m.payload);
+        const k = a.text.indexOf("|");
+        if (historyBuf && historyBuf[a.ch] && k >= 0) {
+            historyBuf[a.ch].push({ user: m.name, ts: Number(a.text.slice(0, k)) || Date.now(), text: a.text.slice(k + 1) });
+        }
+        return true;
+    }
+    if (m.type === "HISTEND") {
+        finishHistory();
+        return true;
+    }
+    if (m.type === "SAVEERR") {
+        logLine("System", "Message not saved: " + m.name);
+        addSystem("Your login expired, so new messages aren't being saved. Log out and back in.", current);
+        return true;
+    }
+    return false;
 }
 
 loginForm.addEventListener("submit", (e) => {
@@ -1382,45 +1403,58 @@ loginForm.addEventListener("submit", (e) => {
     if (claim || authBusy) return;
     const name = loginUser.value.trim();
     if (!name || !loginPass.value) return showAuthError("Enter your username and password.");
-    authenticate("/api/login", { username: name, password: loginPass.value });
+    authenticate("LOGIN", name, loginPass.value);
 });
 
 signupForm.addEventListener("submit", (e) => {
     e.preventDefault();
     if (claim || authBusy) return;
     const name = signupUser.value.trim();
-    if (name.length < 2) return showAuthError("Username needs at least 2 characters.");
+    if (name.length < 2 || name.length > 16) return showAuthError("Username needs 2 to 16 characters.");
     if (name.indexOf("|") >= 0) return showAuthError("Usernames can't contain |");
     if (!signupPass.value) return showAuthError("Please choose a password.");
     if (signupPass.value !== signupConfirm.value) return showAuthError("Passwords don't match.");
-    authenticate("/api/signup", { username: name, password: signupPass.value, confirm: signupConfirm.value });
+    authenticate("SIGNUP", name, signupPass.value);
 });
 
 $("logoutBtn").addEventListener("click", () => location.reload());   // pagehide tells everyone we left
 
 // ---------- saved chat ----------
-// Past messages come from database/chatlogs.js (through the accounts server).
+// Past messages come from the server (app.bzg) as HIST packets, ending with HISTEND.
 // Items get the id "h:<name>" so grouping works; messages from you count as yours.
-async function loadHistory() {
-    try {
-        const all = await callApi("/api/history", { headers: { Authorization: "Bearer " + authToken } });
+function loadHistory() {
+    return new Promise((resolve) => {
+        historyBuf = {};
+        CHANNELS.forEach((c) => { historyBuf[c.id] = []; });
+        historyDone = resolve;
+        clearTimeout(historyTimer);
+        historyTimer = setTimeout(() => {
+            logLine("System", "Couldn't load saved chat: the server didn't answer.");
+            finishHistory();
+        }, HISTORY_WAIT_MS);
+        if (!sendPacket("HISTORY", myId, myName, "")) finishHistory();
+    });
+}
+
+function finishHistory() {
+    clearTimeout(historyTimer);
+    if (historyBuf) {
         CHANNELS.forEach((c) => {
-            const box = store[c.id];
-            box.items = (all[c.id] || []).map((m) => ({
+            store[c.id].items = (historyBuf[c.id] || []).map((m) => ({
                 kind: "msg", id: same(m.user, myName) ? myId : "h:" + m.user.toLowerCase(),
                 name: m.user, text: m.text, ts: m.ts, mention: false
             }));
         });
-    } catch (err) {
-        logLine("System", "Couldn't load saved chat: " + err.message);
     }
+    historyBuf = null;
+    const done = historyDone;
+    historyDone = null;
+    if (done) done();
 }
 
+// Tell the server to keep this message (it also reaches everyone live through MSG).
 function saveMessage(ch, text) {
-    postJson("/api/messages", { channel: ch, text }).catch((err) => {
-        logLine("System", "Message not saved: " + err.message);
-        if (err.status === 401) addSystem("Your login expired, so new messages aren't being saved. Log out and back in.", ch);
-    });
+    sendPacket("SAVE", myId, ch, Date.now() + "|" + text);
 }
 
 $("chatForm").addEventListener("submit", (e) => {

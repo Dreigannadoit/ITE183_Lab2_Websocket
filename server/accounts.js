@@ -6,17 +6,23 @@
 //   2. Chat logs: every sent message is written to database/chatlogs.js, and
 //      handed back to people when they log in.
 //
+// It ALSO forwards everything that isn't /api/... (the web page and the live chat
+// WebSocket) to the Bonezegei server on port 8000. That means port 8001 on its own
+// serves the whole app, so ONE tunnel is enough:   ngrok http 8001
+//
 // No packages needed, just Node.js:   node server/accounts.js
 //
 // Personal project: passwords are stored as plain text and the "session" is a
 // random token kept in memory. Not meant for the open internet.
 
 const http = require("http");
+const net = require("net");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const PORT = 8001;
+const CHAT_PORT = 8000;        // the Bonezegei server (app.bzg)
 const DB_DIR = path.join(__dirname, "..", "database");
 const USERS_FILE = path.join(DB_DIR, "users.js");
 const LOGS_FILE = path.join(DB_DIR, "chatlogs.js");
@@ -156,7 +162,35 @@ const routes = {
     "POST /api/messages": saveMessage
 };
 
-http.createServer(async (req, res) => {
+// ---------- forward the page + live chat to the Bonezegei server ----------
+function proxyPage(req, res) {
+    const up = http.request(
+        { host: "127.0.0.1", port: CHAT_PORT, path: req.url, method: req.method,
+          headers: { ...req.headers, connection: "close" } },
+        (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); }
+    );
+    up.on("error", () => {
+        res.writeHead(502, { "Content-Type": "text/plain" });
+        res.end("The chat server (app.bzg, port " + CHAT_PORT + ") isn't running.");
+    });
+    req.pipe(up);
+}
+
+function proxySocket(req, socket, head) {
+    const up = net.connect(CHAT_PORT, "127.0.0.1", () => {
+        let raw = req.method + " " + req.url + " HTTP/1.1\r\n";
+        for (let i = 0; i < req.rawHeaders.length; i += 2) raw += req.rawHeaders[i] + ": " + req.rawHeaders[i + 1] + "\r\n";
+        up.write(raw + "\r\n");
+        if (head && head.length) up.write(head);
+        socket.pipe(up);
+        up.pipe(socket);
+    });
+    up.on("error", () => socket.destroy());
+    socket.on("error", () => up.destroy());
+}
+
+const server = http.createServer(async (req, res) => {
+    if (!req.url.startsWith("/api/")) return proxyPage(req, res);
     if (req.method === "OPTIONS") return reply(res, 204, {});
     const handler = routes[req.method + " " + req.url.split("?")[0]];
     if (!handler) return reply(res, 404, { error: "Not found" });
@@ -165,7 +199,10 @@ http.createServer(async (req, res) => {
     } catch (err) {
         reply(res, 400, { error: err.message });
     }
-}).listen(PORT, () => {
-    console.log("Chatterbox accounts server on port " + PORT);
+});
+server.on("upgrade", proxySocket);
+server.listen(PORT, () => {
+    console.log("Chatterbox accounts server on port " + PORT + " (open http://localhost:" + PORT + " for the whole app)");
     console.log(users.length + " registered user(s). Database: " + DB_DIR);
+    console.log("Forwarding the page and live chat to port " + CHAT_PORT + ". For ngrok use: ngrok http " + PORT);
 });

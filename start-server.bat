@@ -5,7 +5,6 @@ cd /d "%~dp0"
 
 set PORT=8000
 set RULE=Chatterbox LAN TCP %PORT%
-set RULE2=Chatterbox LAN TCP 8001
 
 echo.
 echo ==========================================
@@ -31,7 +30,7 @@ if not exist "app.bzg" (
 )
 
 rem ---- 2. Windows Firewall: allow other devices to reach the port ----
-netsh advfirewall firewall show rule name="%RULE2%" >nul 2>&1
+netsh advfirewall firewall show rule name="%RULE%" >nul 2>&1
 if errorlevel 1 (
     net session >nul 2>&1
     if errorlevel 1 (
@@ -41,8 +40,7 @@ if errorlevel 1 (
         echo.
     ) else (
         netsh advfirewall firewall add rule name="%RULE%" dir=in action=allow protocol=TCP localport=%PORT% profile=any >nul
-        netsh advfirewall firewall add rule name="%RULE2%" dir=in action=allow protocol=TCP localport=8001 profile=any >nul
-        echo [OK] Firewall rules added for ports %PORT% and 8001.
+        echo [OK] Firewall rule added for port %PORT%.
         echo.
     )
 ) else (
@@ -70,19 +68,7 @@ echo Press Ctrl+C to stop the server.
 echo ------------------------------------------
 echo.
 
-rem ---- 4. Start the accounts + chat history server (needs Node.js) ----
-where node >nul 2>&1
-if errorlevel 1 (
-    echo [!] Node.js was not found, so log in, sign up and saved chats will NOT work.
-    echo     Install Node.js from https://nodejs.org and run this file again.
-    echo.
-) else (
-    start "Chatterbox Accounts" cmd /k node server\accounts.js
-    echo [OK] Accounts server started in its own window ^(port 8001^).
-    echo.
-)
-
-rem ---- 5. Run the chat server, restart it if it ever exits ----
+rem ---- 4. Run the server (chat, accounts and saved chat), restart it if it ever exits ----
 :run
 bonezegei app.bzg
 echo.

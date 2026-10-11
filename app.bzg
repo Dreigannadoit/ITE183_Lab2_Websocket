@@ -2,6 +2,340 @@ include("lib/http.bzg");
 var server = http(8000);
 
 // ==========================================
+// CHATTERBOX SERVER  (everything lives in this one file, no Node.js)
+// ==========================================
+//
+// 1. Serves the web page            (server.get)
+// 2. Relays live chat to everyone   (server.onData -> sendAll)
+// 3. Accounts: sign up / log in     (SIGNUP, LOGIN packets)
+// 4. Chat history                   (SAVE, HISTORY packets)
+//
+// Accounts and history ride on the same WebSocket as the chat, so only port 8000
+// is needed (for ngrok:  ngrok http 8000).
+//
+// Packets use the same shape as the rest of the app:  TYPE|id|name|payload
+//
+//   client -> server
+//     SIGNUP|id|username|password
+//     LOGIN|id|username|password
+//     HISTORY|id||
+//     SAVE|id|channel|timestamp|text        (payload is  timestamp|text)
+//
+//   server -> that one client
+//     AUTHOK|id|username|
+//     AUTHERR|id|message|
+//     HIST|id|user|channel|timestamp|text   (one per saved message)
+//     HISTEND|id||
+//     SAVEERR|id|message|
+//
+// Anything else is a live chat packet and is broadcast to everyone, as before.
+//
+// Personal project: passwords are plain text and there is no real security.
+
+// ------------------------------------------
+// SETTINGS
+// ------------------------------------------
+var CHANNELS = ["general", "random", "help", "memes"];   // keep in sync with public/app.js
+var MAX_TEXT = 300;               // same limit as the message box
+var HISTORY_PER_CHANNEL = 100;    // how many past messages a person gets on login
+var MAX_LOG = 2000;               // saved messages kept in total (oldest dropped)
+
+// Saving to disk. Accounts and messages are kept in memory; with PERSIST = true they
+// are also written to the two files below and read back when the server starts.
+// This needs file functions in the interpreter: see fileRead / fileWrite at the bottom.
+var PERSIST = false;
+var USERS_FILE = "database/users.txt";
+var LOGS_FILE = "database/chatlogs.txt";
+
+// ------------------------------------------
+// DATA (parallel lists, entry n of each list belongs together)
+// ------------------------------------------
+var userName = [];      // username
+var userPass = [];      // password
+
+var sessId = [];        // browser tab id that logged in
+var sessName = [];      // ...and the username it logged in as
+
+var logCh = [];         // channel
+var logUser = [];       // who wrote it
+var logTs = [];         // timestamp (ms since 1970, supplied by the sender's browser)
+var logText = [];       // the message
+
+// ------------------------------------------
+// SMALL HELPERS
+// ------------------------------------------
+
+// Splits  TYPE|id|name|payload  into 4 parts. The last part keeps any extra "|".
+function parsePacket(data) {
+    var parts = [];
+    var rest = data;
+    var i = 0;
+    while (i < 3) {
+        var k = rest.indexOf("|");
+        if (k < 0) {
+            parts.push(rest);
+            rest = "";
+        } else {
+            parts.push(rest.substring(0, k));
+            rest = rest.substring(k + 1);
+        }
+        i = i + 1;
+    }
+    parts.push(rest);
+    return parts;
+}
+
+// Splits  timestamp|text  into 2 parts.
+function parsePair(data) {
+    var k = data.indexOf("|");
+    if (k < 0) {
+        return [data, ""];
+    }
+    return [data.substring(0, k), data.substring(k + 1)];
+}
+
+function reply(clientId, type, id, name, payload) {
+    server.send(clientId, type + "|" + id + "|" + name + "|" + payload);
+}
+
+function findUser(name) {
+    var wanted = name.toLowerCase();
+    var i = 0;
+    while (i < userName.length) {
+        if (userName[i].toLowerCase() == wanted) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+function findSession(id) {
+    var i = 0;
+    while (i < sessId.length) {
+        if (sessId[i] == id) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+function startSession(id, name) {
+    var at = findSession(id);
+    if (at < 0) {
+        sessId.push(id);
+        sessName.push(name);
+    } else {
+        sessName[at] = name;
+    }
+}
+
+function channelKnown(ch) {
+    var i = 0;
+    while (i < CHANNELS.length) {
+        if (CHANNELS[i] == ch) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+// ------------------------------------------
+// ACCOUNTS
+// ------------------------------------------
+function doSignup(clientId, id, name, password) {
+    if (name.length < 2 || name.length > 16) {
+        reply(clientId, "AUTHERR", id, "Username needs 2 to 16 characters.", "");
+        return;
+    }
+    if (password.length < 1) {
+        reply(clientId, "AUTHERR", id, "Please choose a password.", "");
+        return;
+    }
+    if (findUser(name) >= 0) {
+        reply(clientId, "AUTHERR", id, "That username is already registered.", "");
+        return;
+    }
+
+    userName.push(name);
+    userPass.push(password);
+    saveUsers();
+    print("New user confirmed: " + name);
+
+    startSession(id, name);
+    reply(clientId, "AUTHOK", id, name, "");
+}
+
+function doLogin(clientId, id, name, password) {
+    var at = findUser(name);
+    if (at < 0 || userPass[at] != password) {
+        reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
+        return;
+    }
+    startSession(id, userName[at]);
+    reply(clientId, "AUTHOK", id, userName[at], "");
+}
+
+// ------------------------------------------
+// CHAT HISTORY
+// ------------------------------------------
+function doSave(clientId, id, channel, payload) {
+    var s = findSession(id);
+    if (s < 0) {
+        reply(clientId, "SAVEERR", id, "Please log in again.", "");
+        return;
+    }
+    var pair = parsePair(payload);
+    var text = pair[1];
+    if (text.length > MAX_TEXT) {
+        text = text.substring(0, MAX_TEXT);
+    }
+    if (!channelKnown(channel) || text.length < 1) {
+        return;
+    }
+
+    logCh.push(channel);
+    logUser.push(sessName[s]);
+    logTs.push(pair[0]);
+    logText.push(text);
+
+    // Keep the list from growing forever.
+    if (logCh.length > MAX_LOG) {
+        logCh.shift();
+        logUser.shift();
+        logTs.shift();
+        logText.shift();
+    }
+    saveLogs();
+}
+
+function doHistory(clientId, id) {
+    if (findSession(id) < 0) {
+        reply(clientId, "SAVEERR", id, "Please log in again.", "");
+        reply(clientId, "HISTEND", id, "", "");
+        return;
+    }
+    var c = 0;
+    while (c < CHANNELS.length) {
+        var ch = CHANNELS[c];
+
+        // How many saved messages does this channel have?
+        var count = 0;
+        var i = 0;
+        while (i < logCh.length) {
+            if (logCh[i] == ch) {
+                count = count + 1;
+            }
+            i = i + 1;
+        }
+
+        // Send only the newest HISTORY_PER_CHANNEL of them, oldest first.
+        var skip = count - HISTORY_PER_CHANNEL;
+        var seen = 0;
+        i = 0;
+        while (i < logCh.length) {
+            if (logCh[i] == ch) {
+                if (seen >= skip) {
+                    reply(clientId, "HIST", id, logUser[i], ch + "|" + logTs[i] + "|" + logText[i]);
+                }
+                seen = seen + 1;
+            }
+            i = i + 1;
+        }
+        c = c + 1;
+    }
+    reply(clientId, "HISTEND", id, "", "");
+}
+
+// ------------------------------------------
+// SAVING TO DISK (only used when PERSIST = true)
+// ------------------------------------------
+// users.txt     one account per line:  username|password
+// chatlogs.txt  one message per line:  channel|user|timestamp|text
+//
+// These two functions are the only place that touches files. If your Bonezegei
+// build names its file functions differently, change them here and nowhere else.
+function fileRead(path) {
+    return readFile(path);          // should return the whole file as text ("" if missing)
+}
+
+function fileWrite(path, text) {
+    writeFile(path, text);          // should replace the file with `text`
+}
+
+function saveUsers() {
+    if (!PERSIST) {
+        return;
+    }
+    var out = "";
+    var i = 0;
+    while (i < userName.length) {
+        out = out + userName[i] + "|" + userPass[i] + "\n";
+        i = i + 1;
+    }
+    fileWrite(USERS_FILE, out);
+}
+
+function saveLogs() {
+    if (!PERSIST) {
+        return;
+    }
+    var out = "";
+    var i = 0;
+    while (i < logCh.length) {
+        out = out + logCh[i] + "|" + logUser[i] + "|" + logTs[i] + "|" + logText[i] + "\n";
+        i = i + 1;
+    }
+    fileWrite(LOGS_FILE, out);
+}
+
+function loadAll() {
+    if (!PERSIST) {
+        return;
+    }
+    var text = fileRead(USERS_FILE);
+    while (text != null && text.length > 0) {
+        var nl = text.indexOf("\n");
+        var line = text;
+        if (nl >= 0) {
+            line = text.substring(0, nl);
+            text = text.substring(nl + 1);
+        } else {
+            text = "";
+        }
+        if (line.length > 0) {
+            var u = parsePacket(line);     // username | password | (nothing) | (nothing)
+            userName.push(u[0]);
+            userPass.push(u[1]);
+        }
+    }
+
+    text = fileRead(LOGS_FILE);
+    while (text != null && text.length > 0) {
+        var nl2 = text.indexOf("\n");
+        var line2 = text;
+        if (nl2 >= 0) {
+            line2 = text.substring(0, nl2);
+            text = text.substring(nl2 + 1);
+        } else {
+            text = "";
+        }
+        if (line2.length > 0) {
+            var m = parsePacket(line2);    // channel | user | timestamp | text
+            logCh.push(m[0]);
+            logUser.push(m[1]);
+            logTs.push(m[2]);
+            logText.push(m[3]);
+        }
+    }
+    print("Loaded " + userName.length + " user(s) and " + logCh.length + " saved message(s).");
+}
+
+loadAll();
+
+// ==========================================
 // HTTP EVENT HANDLERS
 // ==========================================
 
@@ -25,11 +359,6 @@ server.get = function (path, data){
 // ==========================================
 // WEBSOCKET (WS) EVENT HANDLERS
 // ==========================================
-//
-// The server is a plain relay: it keeps NO state and does NO parsing.
-// Whatever one client sends is broadcast to every connected client.
-// Usernames, join/leave notices and the online list are handled
-// by the clients themselves (see public/index.html).
 
 server.onConnect = function (clientId) {
     print("WebSocket connected! Client ID: " + clientId);
@@ -38,14 +367,36 @@ server.onConnect = function (clientId) {
 };
 
 server.onData = function (message, clientId) {
-    print("Received from Client " + clientId + ": " + message);
+    // Work out the packet type (the text before the first "|").
+    var k = message.indexOf("|");
+    var type = message;
+    if (k >= 0) {
+        type = message.substring(0, k);
+    }
 
-    // Echo the message back to the sender
-    //server.send(clientId, "Echo: " + message);
-    //server.send(clientId, message);
-
-    // Or broadcast it to everyone connected
-    server.sendAll("User " + clientId + " says: " + message);
+    // Account and history packets are answered to the sender only, never broadcast.
+    // Their content is not printed (it holds passwords).
+    if (type == "SIGNUP" || type == "LOGIN") {
+        var a = parsePacket(message);          // type, id, username, password
+        if (type == "SIGNUP") {
+            doSignup(clientId, a[1], a[2], a[3]);
+        } else {
+            doLogin(clientId, a[1], a[2], a[3]);
+        }
+    }
+    else if (type == "SAVE") {
+        var b = parsePacket(message);          // type, id, channel, timestamp|text
+        doSave(clientId, b[1], b[2], b[3]);
+    }
+    else if (type == "HISTORY") {
+        var c = parsePacket(message);
+        doHistory(clientId, c[1]);
+    }
+    else {
+        // Live chat: broadcast it to everyone connected.
+        print("Received from Client " + clientId + ": " + type);
+        server.sendAll("User " + clientId + " says: " + message);
+    }
 };
 
 server.onDisconnect = function (clientId) {

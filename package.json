@@ -1,11 +1,10 @@
 {
     "name": "ite183-lab2-websocket",
     "version": "1.0.0",
-    "description": "Chatterbox - a Bonezegei WebSocket chat app",
+    "description": "Chatterbox - a Bonezegei WebSocket chat app (server is app.bzg only)",
     "main": "app.bzg",
     "scripts": {
-        "start": "bonezegei app.bzg",
-        "accounts": "node server/accounts.js"
+        "start": "bonezegei app.bzg"
     },
     "dependencies": {
         "http": "^1.0.0"

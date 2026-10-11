@@ -1,6 +1,6 @@
 # Chatterbox – Bonezegei WebSocket Chat (ITE183 Lab 2)
 
-A real-time group chat app with a Discord-style layout: channels on the left, the conversation in the middle, and who's online on the right. The server is a small relay written in **Bonezegei Script Language (`.bzg`)**. It serves a cartoon-style browser client with heavy outlines and a semi-3D look.
+A real-time group chat app with a Discord-style layout: channels on the left, the conversation in the middle, and who's online on the right. The whole server is one file written in **Bonezegei Script Language (`.bzg`)**: `app.bzg` serves the page, relays live chat, and handles accounts and saved chat. There is no Node.js. It serves a cartoon-style browser client with heavy outlines and a semi-3D look.
 
 ## Features
 
@@ -29,12 +29,10 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ```
 .
 ├── start-server.bat     # Windows launcher: firewall rule, shows your IP, runs the server
-├── app.bzg              # Server: HTTP routes + WebSocket relay (live chat)
-├── server/
-│   └── accounts.js      # Node server: sign up, log in, chat history (port 8001)
-├── database/            # Created automatically on first run
-│   ├── users.js         # All accounts: id, username, password, createdAt
-│   └── chatlogs.js      # All saved messages, per channel
+├── app.bzg              # The entire server: web page, live chat relay, accounts, saved chat
+├── database/            # Only if PERSIST = true in app.bzg
+│   ├── users.txt        # Accounts: username|password
+│   └── chatlogs.txt     # Saved messages: channel|user|timestamp|text
 ├── package.json
 ├── lib/
 │   ├── http.bzg         # Loads the native http module
@@ -50,44 +48,44 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 
 - Windows (the native module is a `.dll`)
 - The **Bonezegei** interpreter, available as `bonezegei`
-- **Node.js** (any recent version, no packages to install) for accounts and saved chat
 - A modern web browser
 
 ## Getting Started
 
-Two programs need to be running (`start-server.bat` starts both for you):
+One program does everything (`start-server.bat` runs it for you):
 
 ```bash
-bonezegei app.bzg          # live chat + the web page   (npm start)
-node server/accounts.js    # accounts + saved chat      (npm run accounts)
+bonezegei app.bzg          # page + live chat + accounts + saved chat   (npm start)
 ```
 
 Open <http://localhost:8000>, create an account on the **Sign up** tab and start chatting. Open a second tab or device on the same network (use the host machine's IP instead of `localhost`) to chat with yourself.
 
 ## Accounts and saved chat
 
-`server/accounts.js` is a small Node server on port **8001** (built-in modules only). The page talks to it with `fetch`, using the same host name it was opened from.
+Accounts and history use the **same WebSocket as the chat**, so only port **8000** is involved. They are extra packet types that `app.bzg` answers to the sender only (they are never broadcast):
 
-| Route | What it does |
-| ----- | ------------ |
-| `POST /api/signup` | Checks the form (2–16 character name, password, passwords match, name not taken). On success it **rewrites `database/users.js`** and logs the person in |
-| `POST /api/login` | Checks username and password and returns a session token |
-| `GET /api/history` | Returns the saved messages of every channel (needs the token) |
-| `POST /api/messages` | Saves one message (needs the token). The browser calls it every time you send a message |
+| Client sends | Server answers | What it does |
+| ------------ | -------------- | ------------ |
+| `SIGNUP\|id\|username\|password` | `AUTHOK` or `AUTHERR` | Checks the name (2–16 characters, not taken, case-insensitive) and a password was given, then creates the account and logs the tab in |
+| `LOGIN\|id\|username\|password` | `AUTHOK` or `AUTHERR` | Checks username and password |
+| `HISTORY\|id\|\|` | `HIST` per message, then `HISTEND` | Returns the saved messages (last `HISTORY_PER_CHANNEL` per channel) |
+| `SAVE\|id\|channel\|timestamp\|text` | `SAVEERR` only if not logged in | Saves one message. The browser sends it every time you send a message |
 
-`database/users.js` and `database/chatlogs.js` are real JavaScript modules (`module.exports = [...]`), rewritten whole each time. You can open and read them, or `require()` them from another script. Delete a file to reset it.
+The server remembers which tab (`id`) logged in, so `SAVE` and `HISTORY` only work after a login.
 
-**This is a personal project, so there is no security:** passwords are saved as plain text, anyone who can open port 8001 can reach the API, and the session token lives only in server memory (restarting `accounts.js` means people log in again).
+**Where the data lives.** Accounts and messages are kept in lists inside `app.bzg`, so they last until the server stops. To keep them across restarts set `PERSIST = true` at the top of `app.bzg`; they are then written to `database/users.txt` and `database/chatlogs.txt` and read back on start. This uses `readFile` / `writeFile`, which are wrapped in `fileRead` / `fileWrite` near the bottom of the settings area. If your Bonezegei build names its file functions differently, change them there.
 
-**What is saved:** text messages only. Pictures, join/leave notices and typing dots are live only, as before. If the accounts server is down, the page says so at login.
+**This is a personal project, so there is no security:** passwords are saved as plain text and the login is tied to the browser tab's random id.
 
-**Settings:** `PORT`, `CHANNELS` and `HISTORY_PER_CHANNEL` at the top of `server/accounts.js`. If you add a channel in `public/app.js`, add it to `CHANNELS` there too.
+**What is saved:** text messages only. Pictures, join/leave notices and typing dots are live only. Timestamps come from the sender's browser.
+
+**Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `MAX_LOG`, `PERSIST`. If you add a channel in `public/app.js`, add it to `CHANNELS` there too.
 
 ## How It Works
 
-The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/app.js`; accounts and saved messages are handled by `server/accounts.js`.
+The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/app.js`; accounts and saved messages are handled inside `app.bzg`, using packets that are answered to one client instead of being broadcast.
 
-This is on purpose. An earlier version kept the username list on the server in a BSL array, and it misbehaved (messages were treated as new usernames, and the server stalled when two people joined together). The relay design only uses `sendAll`, which is the same thing the original lab server did.
+The live chat part is a relay on purpose. An earlier version kept the username list on the server in a BSL array, and it misbehaved (messages were treated as new usernames, and the server stalled when two people joined together). The relay design only uses `sendAll`, which is the same thing the original lab server did.
 
 ### Message format
 
@@ -126,9 +124,9 @@ If a message arrives without a known channel in front (for example from an older
 
 | Handler | Behavior |
 | ------- | -------- |
-| `server.get` | `/` serves `public/index.html`, anything else serves `public/404.html` |
+| `server.get` | `/` serves `public/index.html`, `/style.css` and `/app.js` their files, anything else serves `public/404.html` |
 | `server.onConnect` | Logs the connection |
-| `server.onData` | Logs who sent it (not the content, since pictures are many packets) and broadcasts it to everyone with `sendAll` |
+| `server.onData` | `SIGNUP`, `LOGIN`, `HISTORY` and `SAVE` are handled by the server and answered to the sender only. Everything else is broadcast to everyone with `sendAll` |
 | `server.onDisconnect` | Logs the disconnection |
 
 ## Limitations
@@ -136,6 +134,7 @@ If a message arrives without a known channel in front (for example from an older
 - Because the server doesn't check anything, a person who edits the page's code could pretend to be someone else. That's fine for a lab or a class demo, but not for real use.
 - If someone's browser crashes (no `BYE`), their name stays in the list for up to 2.5 minutes.
 - Pictures are not saved (only text), so they are gone after a refresh.
+- With `PERSIST = false`, accounts and saved chat are lost when the server stops.
 - Messages sent by others while your connection was down are not filled in until you log in again.
 
 ## Design
@@ -155,7 +154,7 @@ Fonts are Lilita One (headings) and Nunito (text), loaded from Google Fonts. Off
 
 Other phones and laptops on the same Wi-Fi can join the chat through your PC's IP address.
 
-1. **Start the servers with `start-server.bat`** (double-click it). The first time, right-click it and choose **Run as administrator** so it can open the Windows Firewall for ports 8000 and 8001. After that, a normal double-click is enough.
+1. **Start the servers with `start-server.bat`** (double-click it). The first time, right-click it and choose **Run as administrator** so it can open the Windows Firewall for port 8000. After that, a normal double-click is enough.
 2. The window prints the addresses to share, for example `http://192.168.1.23:8000`. Use the one starting with `192.168` or `10.`.
 3. On the other device, connected to the **same Wi-Fi**, type that address into the browser.
 4. Pick different usernames and chat.
@@ -183,6 +182,10 @@ When Windows asks whether to let `bonezegei` through the firewall, allow it.
 
 The page picks up the address it was opened from, so no code changes are needed for other devices.
 
+## Sharing over the internet with ngrok
+
+Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one port, so a single tunnel carries it all. Open the `https://...ngrok...` address ngrok prints.
+
 ## Customization
 
 - **Add or rename channels:** edit the `CHANNELS` list near the top of the script in `public/index.html`. Every browser needs the same list. The server doesn't need to change.
@@ -200,7 +203,7 @@ The page picks up the address it was opened from, so no code changes are needed 
 - **Wrong IP:** VPNs, WSL and VirtualBox add extra addresses. Use the one that starts with `192.168` or `10.`.
 
 - **Status shows Offline:** make sure the server is running. The client retries every 2 seconds.
-- **"Can't reach the account server":** `node server/accounts.js` isn't running (or port 8001 is blocked by the firewall for other devices).
+- **"The server didn't answer" at log in:** the page is open but `app.bzg` isn't answering (or is an older copy without the account packets). Restart it with the current `app.bzg`.
 - **"That account is already online":** that login is open in another tab or device. Wait a few minutes if it was a crashed tab.
 - **Port already in use:** close the other program or change the port.
 
