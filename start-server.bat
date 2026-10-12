@@ -1,14 +1,14 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Chatterbox Server
+title BISCORD Server
 cd /d "%~dp0"
 
 set PORT=8000
-set RULE=Chatterbox LAN TCP %PORT%
+set RULE=BISCORD LAN TCP %PORT%
 
 echo.
 echo ==========================================
-echo    Chatterbox - Local Network Server
+echo    BISCORD - Local Network Server
 echo ==========================================
 echo.
 

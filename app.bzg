@@ -2,7 +2,7 @@ include("lib/http.bzg");
 var server = http(8000);
 
 // ==========================================
-// CHATTERBOX SERVER  (everything lives in this one file, no Node.js)
+// BISCORD SERVER  (everything lives in this one file, no Node.js)
 // ==========================================
 //
 // 1. Serves the web page            (server.get)
