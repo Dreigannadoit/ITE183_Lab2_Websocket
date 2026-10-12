@@ -1,4 +1,4 @@
-# Chatterbox – Bonezegei WebSocket Chat (ITE183 Lab 2)
+# BISCORD – Bonezegei WebSocket Chat (ITE183 Lab 2)
 
 A real-time group chat app with a Discord-style layout: channels on the left, the conversation in the middle, and who's online on the right. The whole server is one file written in **Bonezegei Script Language (`.bzg`)**: `app.bzg` serves the page, relays live chat, and handles accounts and saved chat. There is no Node.js. It serves a cartoon-style browser client with heavy outlines and a semi-3D look.
 
@@ -41,11 +41,16 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 │   ├── sqlite.bzg       # Loads the native SQLite module (BSL_SQLite)
 │   └── sqlite/sqlite.dll
 ├── public/
+<<<<<<< HEAD
 │   ├── login.html       # Login / sign up page (served at /)
 │   ├── login.js         # Login page logic
 │   ├── chat.html        # Main chat page (served at /chat)
 │   ├── chat.js          # Chat page logic
 │   ├── common.js        # Shared by both pages: connection address, login note, console
+=======
+│   ├── index.html       # BISCORD client (join screen + chat screen)
+│   ├── app.js           # Client logic
+>>>>>>> 0b170acaad095b2bd67c95379247de7c3ac9b656
 │   ├── style.css        # Cartoon-style theme
 │   └── 404.html
 └── README.md
@@ -185,13 +190,13 @@ bonezegei app.bzg            # start the server
 and, once, in an **administrator** terminal:
 
 ```bash
-netsh advfirewall firewall add rule name="Chatterbox LAN TCP 8000" dir=in action=allow protocol=TCP localport=8000 profile=any
+netsh advfirewall firewall add rule name="BISCORD LAN TCP 8000" dir=in action=allow protocol=TCP localport=8000 profile=any
 ```
 
 To remove the firewall rule later:
 
 ```bash
-netsh advfirewall firewall delete rule name="Chatterbox LAN TCP 8000"
+netsh advfirewall firewall delete rule name="BISCORD LAN TCP 8000"
 ```
 
 When Windows asks whether to let `bonezegei` through the firewall, allow it.
@@ -212,7 +217,7 @@ Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one por
 
 ## Troubleshooting
 
-- **Console shows messages but the chat area stays empty:** open the Console and look at the `[Server]` lines. Chatterbox messages look like `HELLO|...` or `Alice says: Hello`. If you see a `[System] Ignored a message...` line, the server is running an old `app.bzg`. Replace the one in the project root with the relay version and restart. The page also understands the original lab server's `User <n> says: ...` format, so chat still works with it.
+- **Console shows messages but the chat area stays empty:** open the Console and look at the `[Server]` lines. BISCORD messages look like `HELLO|...` or `Alice says: Hello`. If you see a `[System] Ignored a message...` line, the server is running an old `app.bzg`. Replace the one in the project root with the relay version and restart. The page also understands the original lab server's `User <n> says: ...` format, so chat still works with it.
 
 - **`Attempt to call method on non-object type` when the server runs:** `app.bzg` called a method on a string or array (such as `.indexOf`, `.length` or `.push`). BSL has none, see "Editing app.bzg" below. The line number it reports is often the end of the file, not the real spot.
 - **`Undefined variable <name>` when the server runs:** a function is called before it is defined. Move it above the code that calls it.

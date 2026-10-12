@@ -1,4 +1,4 @@
-// Chatterbox client. Loaded by index.html (must come after the page markup).
+// BISCORD client. Loaded by index.html (must come after the page markup).
 
 // ---------- connection ----------
 // Accounts and chat history are handled by the server (app.bzg) over this same WebSocket.
@@ -82,7 +82,7 @@ function writeLine(tag, text) {
 }
 
 // Position state (declared before placeConsole uses it)
-const POS_KEY = "chatterbox.console";
+const POS_KEY = "biscord.console";
 let userPlaced = false;   // true once the console has been dragged somewhere
 let drag = null;
 let suppressClick = false;
@@ -351,7 +351,7 @@ function connect() {
         if (PACKET_TYPES.indexOf(m.type) < 0) {
             if (!warnedUnknown) {
                 warnedUnknown = true;
-                logLine("System", "Ignored a message that isn't a Chatterbox packet. If the chat stays empty, make sure the server is running the new app.bzg.");
+                logLine("System", "Ignored a message that isn't a BISCORD packet. If the chat stays empty, make sure the server is running the new app.bzg.");
             }
             return;
         }
