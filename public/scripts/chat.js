@@ -1306,6 +1306,7 @@ function loadHistory() {
 function finishHistory() {
     clearTimeout(historyTimer);
     if (historyBuf) {
+        logLine("System", "Saved chat received: " + CHANNELS.map((c) => "#" + c.id + " " + (historyBuf[c.id] || []).length).join(", "));
         CHANNELS.forEach((c) => {
             store[c.id].items = (historyBuf[c.id] || []).map((m) => {
                 const who = same(m.user, myName) ? myId : "h:" + m.user.toLowerCase();

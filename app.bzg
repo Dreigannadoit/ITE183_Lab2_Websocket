@@ -401,6 +401,8 @@ function doHistory(clientId, id) {
         reply(clientId, "HISTEND", id, "", "");
         return;
     }
+    var total = dbQuery("SELECT COUNT(*) AS n FROM messages;");
+    print("HISTORY asked by " + sessName[findSession(id)] + ": database holds " + total[0].n + " message(s) in total");
     var c = 0;
     while (c < sizeof(CHANNELS)) {
         var ch = CHANNELS[c];
@@ -411,6 +413,7 @@ function doHistory(clientId, id) {
                             + "WHERE c.name = " + sqlStr(ch) + " ORDER BY m.id DESC LIMIT " + HISTORY_PER_CHANNEL + ";");
 
         // ... sent oldest first.
+        print("History for " + sessName[findSession(id)] + " #" + ch + ": " + rowCount(rows) + " message(s) found");
         var i = rowCount(rows) - 1;
         while (i >= 0) {
             reply(clientId, "HIST", id, rows[i].username, ch + "|" + rows[i].ts + "|" + rows[i].text);
@@ -494,6 +497,7 @@ function newPendingSlot() {
 function picHeader(id, payload) {
     var s = findSession(id);
     if (s < 0) {
+        print("Picture header ignored: this tab is not logged in (id " + id + ")");
         return;
     }
     // a sender only ever sends one picture at a time: drop anything it left unfinished
@@ -506,27 +510,35 @@ function picHeader(id, payload) {
     }
     var f = splitAll(payload);
     if (sizeof(f) < 7) {
+        print("Picture header ignored: only " + sizeof(f) + " fields in: " + substr(payload, 0, 60));
         return;
     }
     if (!channelKnown(f[0])) {
+        print("Picture header ignored: unknown channel " + f[0]);
         return;
     }
     if (!onlyChars(f[1], ID_CHARS, 24)) {
+        print("Picture header ignored: bad picture id " + f[1]);
         return;
     }
     if (!onlyChars(f[2], DIGITS, 3)) {
+        print("Picture header ignored: bad piece count " + f[2]);
         return;
     }
     if (!mimeOk(f[3])) {
+        print("Picture header ignored: bad type " + f[3]);
         return;
     }
     if (!onlyChars(f[4], DIGITS, 6)) {
+        print("Picture header ignored: bad byte size " + f[4]);
         return;
     }
     if (!onlyChars(f[5], DIGITS, 4)) {
+        print("Picture header ignored: bad width " + f[5]);
         return;
     }
     if (!onlyChars(f[6], DIGITS, 4)) {
+        print("Picture header ignored: bad height " + f[6]);
         return;
     }
     var ts = "0";
@@ -537,6 +549,7 @@ function picHeader(id, payload) {
     }
     var have = dbQuery("SELECT id FROM pictures WHERE pic_id = " + sqlStr(f[1]) + " LIMIT 1;");
     if (rowCount(have) > 0) {
+        print("Picture header ignored: " + f[1] + " is already saved");
         return;
     }
     var at = newPendingSlot();
@@ -551,6 +564,7 @@ function picHeader(id, payload) {
     pendH[at] = f[6];
     pendTs[at] = ts;
     pendGot[at] = 0;
+    print("Picture " + f[1] + " from " + sessName[s] + " accepted: expecting " + f[2] + " pieces");
 }
 
 // IMGC|id|name|picId|index|base64data
@@ -567,6 +581,9 @@ function picChunk(id, payload) {
     var index = substr(payload, k1 + 1, k2 - k1 - 1);
     var at = findPending(picId);
     if (at < 0) {
+        if (index == "0") {
+            print("Picture piece 0 ignored: no saved header for " + picId);
+        }
         return;
     }
     if (pendOwner[at] != id) {
@@ -574,6 +591,7 @@ function picChunk(id, payload) {
     }
     // pieces arrive in order; anything else means the picture is damaged
     if (index != ("" + pendGot[at])) {
+        print("Picture " + picId + " dropped: got piece " + index + " but expected " + pendGot[at]);
         freePending(at);
         return;
     }
