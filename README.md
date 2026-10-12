@@ -5,7 +5,7 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ## Features
 
 - **Accounts**: a **Sign up** page (username, password, confirm password) and a **Log in** page (username, password). Usernames are unique (case-insensitive), 2–16 characters, no `|`
-- **Saved chat**: every text message is stored, so when you log in again the earlier conversation in each channel is already there (the last 100 per channel are sent on login; up to 2000 messages are kept in total)
+- **Saved chat**: every text message is stored in a SQLite database, so when you log in again the earlier conversation in each channel is already there (the last 100 per channel are sent on login)
 - **Log out** button in your user card
 - The same account can't be online twice at once (a second login is refused until the first tab closes)
 - Join and leave announcements
@@ -30,18 +30,22 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 .
 ├── start-server.bat     # Windows launcher: firewall rule, shows your IP, runs the server
 ├── app.bzg              # The entire server: web page, live chat relay, accounts, saved chat
-├── database/            # Only used if PERSIST = true in app.bzg
-│   ├── images/          # One .txt per saved picture (base64)
-│   ├── users.txt        # Accounts: username|password (created on first signup)
-│   └── chatlogs.txt     # Saved messages: channel|user|timestamp|text
+├── database/
+│   ├── chatterbox.db    # SQLite database: users, channels, messages (created on first run)
+│   └── images/          # One .txt per saved picture (base64)
 ├── package.json
 ├── lib/
 │   ├── http.bzg         # Loads the native http module
 │   ├── http.json        # Method reference for the http module
-│   └── http/http.dll    # Native HTTP/WebSocket library
+│   ├── http/http.dll    # Native HTTP/WebSocket library
+│   ├── sqlite.bzg       # Loads the native SQLite module (BSL_SQLite)
+│   └── sqlite/sqlite.dll
 ├── public/
-│   ├── index.html       # Chatterbox client (join screen + chat screen)
-│   ├── app.js           # Client logic
+│   ├── login.html       # Login / sign up page (served at /)
+│   ├── login.js         # Login page logic
+│   ├── chat.html        # Main chat page (served at /chat)
+│   ├── chat.js          # Chat page logic
+│   ├── common.js        # Shared by both pages: connection address, login note, console
 │   ├── style.css        # Cartoon-style theme
 │   └── 404.html
 └── README.md
@@ -76,19 +80,27 @@ Accounts and history use the **same WebSocket as the chat**, so only port **8000
 
 The server remembers which tab (`id`) logged in, so `SAVE` and `HISTORY` only work after a login.
 
-**Where the data lives.** Accounts and messages are kept in lists inside `app.bzg`, so by default they last until the server stops. To keep them across restarts set `PERSIST = true` at the top of `app.bzg`; they are then written to `database/users.txt` and `database/chatlogs.txt` (using BSL's `readFile` / `writeFile`) and read back on start. The `database/` folder must exist. Messages are held in a fixed-size ring buffer, so once `MAX_LOG` (2000) messages are stored the oldest is overwritten.
+**Where the data lives.** Everything is stored in one SQLite file, `database/chatterbox.db` (the `database/` folder must exist), using the [BSL_SQLite](https://github.com/bonezegei/BSL_SQLite) module. Tables:
 
-Older versions of this project stored accounts in `database/users.js` and `chatlogs.js` through Node. Those files are no longer used and can be deleted. To keep an old account, add a line `username|password` to `database/users.txt`.
+| Table | Columns |
+| --- | --- |
+| `users` | `id`, `username` (unique, case-insensitive), `password`, `created_at` (Unix seconds) |
+| `channels` | `id`, `name` (one row per entry in `CHANNELS`, added on start) |
+| `messages` | `id`, `channel_id` -> `channels`, `user_id` -> `users`, `ts` (ms, from the sender's browser), `text` |
+
+On login the server sends the newest `HISTORY_PER_CHANNEL` messages of each channel. BSL_SQLite has no bound parameters, so `app.bzg` escapes all text with `sqlStr()` before putting it in SQL; keep doing that if you add queries.
 
 **This is a personal project, so there is no security:** passwords are saved as plain text and the login is tied to the browser tab's random id.
 
-**What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is written to `database/images/<picId>.txt` (base64 text, about 70-220 KB) and listed in `chatlogs.txt` as `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Saving pictures needs `PERSIST = true`. Timestamps come from the sender's browser.
+**What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is written to `database/images/<picId>.txt` (base64 text, about 70-220 KB) and stored in the `messages` table as the text `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Timestamps come from the sender's browser.
 
-**Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `MAX_LOG`, `PERSIST`. If you add a channel in `public/app.js`, add it to `CHANNELS` there too.
+**Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `DB_FILE`. If you add a channel in `public/chat.js`, add it to `CHANNELS` there too.
 
 ## How It Works
 
-The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/app.js`; accounts and saved messages are handled inside `app.bzg`, using packets that are answered to one client instead of being broadcast.
+**Two pages.** `/` is the login / sign up page (`login.html`) and `/chat` is the chat (`chat.html`). After a successful login the login page saves your tab id and name in the browser tab (`sessionStorage`) and opens `/chat`. The chat page opens its own WebSocket and sends `RESUME|id||`; the server answers `AUTHOK` with your username if that login is known, or `AUTHERR`, which sends you back to the login page. Logging out sends `LOGOUT|id||`, clears the note and returns to the login page. Refreshing the chat page keeps you logged in; closing the tab does not.
+
+The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/chat.js`; accounts and saved messages are handled inside `app.bzg`, using packets that are answered to one client instead of being broadcast.
 
 The live chat part is a relay on purpose. An earlier version kept the username list on the server in a BSL array, and it misbehaved (messages were treated as new usernames, and the server stalled when two people joined together). The relay design only uses `sendAll`, which is the same thing the original lab server did.
 
@@ -118,7 +130,7 @@ If a message arrives without a known channel in front (for example from an older
 
 **Memory.** Browsers keep decoded pictures in memory, and that is the expensive part. Each picture is only decoded while it is on screen (or within about a screen of it). When it scrolls away, you switch channel, or the tab stays hidden for 5 seconds, the picture is released. Scrolling back shows the loading animation briefly and reloads it from the small compressed copy kept in the page. Past 40 MB of kept pictures, the oldest are dropped and show "Removed to save memory".
 
-**Settings** are the constants at the top of the script in `public/index.html`: `MAX_DIM`, `MAX_IMG_BYTES`, `CHUNK_CHARS`, `MAX_STORE_BYTES`, `MIN_LOADING_MS`, `HIDDEN_UNLOAD_MS`.
+**Settings** are the constants at the top of the script in `public/chat.js`: `MAX_DIM`, `MAX_IMG_BYTES`, `CHUNK_CHARS`, `MAX_STORE_BYTES`, `MIN_LOADING_MS`, `HIDDEN_UNLOAD_MS`.
 
 **Limits.**
 - Pictures are saved on the server, so they survive a refresh and people who join later see them. Only pictures sent while the server was running this version are saved.
@@ -129,7 +141,7 @@ If a message arrives without a known channel in front (for example from an older
 
 | Handler | Behavior |
 | ------- | -------- |
-| `server.get` | `/` serves `public/index.html`, `/style.css` and `/app.js` their files, anything else serves `public/404.html` |
+| `server.get` | `/` serves `public/login.html` (also `/login`), `/chat` serves `public/chat.html`, and `/style.css`, `/common.js`, `/login.js`, `/chat.js` their files, anything else serves `public/404.html` |
 | `server.onConnect` | Logs the connection |
 | `server.onData` | `SIGNUP`, `LOGIN`, `HISTORY` and `SAVE` are handled by the server and answered to the sender only. Everything else is broadcast to everyone with `sendAll` |
 | `server.onDisconnect` | Logs the disconnection |
@@ -138,13 +150,12 @@ If a message arrives without a known channel in front (for example from an older
 
 - Because the server doesn't check anything, a person who edits the page's code could pretend to be someone else. That's fine for a lab or a class demo, but not for real use.
 - If someone's browser crashes (no `BYE`), their name stays in the list for up to 2.5 minutes.
-- Picture files are not deleted when the 2000-message limit pushes their entry out of `chatlogs.txt`; delete old files in `database/images/` by hand if the folder grows.
-- With `PERSIST = false`, accounts and saved chat are lost when the server stops.
+- Messages are never deleted, so `chatterbox.db` and `database/images/` only grow.
 - Messages sent by others while your connection was down are not filled in until you log in again.
 
 ## Design
 
-Palette (defined as CSS variables at the top of `public/index.html`):
+Palette (defined as CSS variables at the top of `public/style.css`):
 
 | Role | Colors |
 | ---- | ------ |
@@ -193,11 +204,11 @@ Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one por
 
 ## Customization
 
-- **Add or rename channels:** edit the `CHANNELS` list near the top of the script in `public/index.html`. Every browser needs the same list. The server doesn't need to change.
+- **Add or rename channels:** edit the `CHANNELS` list near the top of the script in `public/chat.js`. Every browser needs the same list. The server doesn't need to change.
 
 - **Change the port:** edit `http(8000)` in `app.bzg`. The client uses the page's own host and port, so it follows automatically.
-- **Presence timing:** adjust `HEARTBEAT_MS` and `STALE_MS` at the top of the script in `public/index.html`.
-- **Recolor the app:** edit the variables in `:root` in `public/index.html`.
+- **Presence timing:** adjust `HEARTBEAT_MS` and `STALE_MS` at the top of the script in `public/chat.js`.
+- **Recolor the app:** edit the variables in `:root` in `public/style.css`.
 
 ## Troubleshooting
 

@@ -1,14 +1,16 @@
 include("lib/http.bzg");
+include("lib/sqlite.bzg");
 var server = http(8000);
 
 // ==========================================
 // CHATTERBOX SERVER  (everything lives in this one file, no Node.js)
 // ==========================================
 //
-// 1. Serves the web page            (server.get)
+// 1. Serves the web pages           (server.get)  login page "/" and chat page "/chat"
 // 2. Relays live chat to everyone   (server.onData -> sendAll)
 // 3. Accounts: sign up / log in     (SIGNUP, LOGIN packets)
 // 4. Chat history                   (SAVE, HISTORY packets)
+// 5. Stores users, channels and messages in a SQLite database (BSL_SQLite)
 //
 // Accounts and history ride on the same WebSocket as the chat, so only port 8000
 // is needed (for ngrok:  ngrok http 8000).
@@ -18,11 +20,13 @@ var server = http(8000);
 //   client -> server
 //     SIGNUP|id|username|password
 //     LOGIN|id|username|password
+//     RESUME|id||                           (chat page: "is this tab still logged in?")
+//     LOGOUT|id||                           (forget this login)
 //     HISTORY|id||
 //     SAVE|id|channel|timestamp|text        (payload is  timestamp|text)
 //
 //   server -> that one client
-//     AUTHOK|id|username|
+//     AUTHOK|id|username|                   (answer to SIGNUP, LOGIN and RESUME)
 //     AUTHERR|id|message|
 //     HIST|id|user|channel|timestamp|text   (one per saved message)
 //     HISTEND|id||
@@ -38,30 +42,18 @@ var server = http(8000);
 var CHANNELS = ["general", "random", "help", "memes"];   // keep in sync with public/app.js
 var MAX_TEXT = 300;               // same limit as the message box
 var HISTORY_PER_CHANNEL = 100;    // how many past messages a person gets on login
-var MAX_LOG = 2000;               // saved messages kept in total (oldest dropped)
 
-// Saving to disk. Accounts and messages are kept in memory; with PERSIST = true they
-// are also written to the two files below and read back when the server starts.
-// This needs file functions in the interpreter: see fileRead / fileWrite at the bottom.
-var PERSIST = true;
-var USERS_FILE = "database/users.txt";
-var LOGS_FILE = "database/chatlogs.txt";
+// Database (SQLite, through the BSL_SQLite module in lib/sqlite.bzg).
+// Tables:  users(id, username, password, created_at)
+//          channels(id, name)
+//          messages(id, channel_id -> channels, user_id -> users, ts, text)
+var DB_FILE = "database/chatterbox.db";
 
 // ------------------------------------------
-// DATA (parallel lists, entry n of each list belongs together)
+// DATA
 // ------------------------------------------
-var userName = [];      // username
-var userPass = [];      // password
-
 var sessId = [];        // browser tab id that logged in
 var sessName = [];      // ...and the username it logged in as
-
-var logCh = [];         // channel
-var logUser = [];       // who wrote it
-var logTs = [];         // timestamp (ms since 1970, supplied by the sender's browser)
-var logText = [];       // the message
-var logN = 0;           // how many messages are stored (never more than MAX_LOG)
-var logHead = 0;        // slot of the oldest message once the list is full (ring buffer)
 
 // ------------------------------------------
 // SMALL HELPERS
@@ -111,6 +103,68 @@ function lower(s) {
     return out;
 }
 
+// Takes the first line off `text`; returns [line, restOfText].
+function nextLine(text) {
+    var nl = indexOfChar(text, "\n", 0);
+    var line = text;
+    var rest = "";
+    if (nl >= 0) {
+        line = substr(text, 0, nl);
+        rest = substr(text, nl + 1);
+    }
+    var n = sizeof(line);
+    if (n > 0) {
+        if (line[n - 1] == "\r") {
+            line = substr(line, 0, n - 1);
+        }
+    }
+    return [line, rest];
+}
+
+var DIGITS = "0123456789";
+
+// true if `s` is 1..maxLen characters, all taken from `allowed`
+function onlyChars(s, allowed, maxLen) {
+    var n = sizeof(s);
+    if (n < 1) {
+        return false;
+    }
+    if (n > maxLen) {
+        return false;
+    }
+    var i = 0;
+    while (i < n) {
+        if (indexOfChar(allowed, s[i], 0) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Turns any text into a quoted SQL string:  it's  ->  'it''s'
+// BSL_SQLite has no bound parameters, so EVERY piece of user text that goes into an
+// SQL statement must pass through here (or be checked with onlyChars first).
+function sqlStr(s) {
+    var out = "'";
+    var rest = s;
+    var k = indexOfChar(rest, "'", 0);
+    while (k >= 0) {
+        out = out + substr(rest, 0, k) + "''";
+        rest = substr(rest, k + 1);
+        k = indexOfChar(rest, "'", 0);
+    }
+    return out + rest + "'";
+}
+
+// number of rows in a db.query result.
+// NOTE: never compare a db.query result with null (rows == null): the result array
+// is built by the native module and that comparison can wrongly say "null" even when
+// there are rows. Just use sizeof().
+function rowCount(rows) {
+    return sizeof(rows);
+}
+
 // Splits  TYPE|id|name|payload  into 4 parts. The last part keeps any extra "|".
 function parsePacket(data) {
     var parts = [];
@@ -144,19 +198,10 @@ function reply(clientId, type, id, name, payload) {
     server.send(clientId, type + "|" + id + "|" + name + "|" + payload);
 }
 
-function findUser(name) {
-    var wanted = lower(name);
-    var i = 0;
-    while (i < sizeof(userName)) {
-        if (lower(userName[i]) == wanted) {
-            return i;
-        }
-        i = i + 1;
-    }
-    return -1;
-}
-
 function findSession(id) {
+    if (id == "") {
+        return -1;          // "" marks a free slot, never a real login
+    }
     var i = 0;
     while (i < sizeof(sessId)) {
         if (sessId[i] == id) {
@@ -169,11 +214,29 @@ function findSession(id) {
 
 function startSession(id, name) {
     var at = findSession(id);
-    if (at < 0) {
-        sessId[sizeof(sessId)] = id;
-        sessName[sizeof(sessName)] = name;
-    } else {
+    if (at >= 0) {
         sessName[at] = name;
+        return;
+    }
+    // reuse a slot freed by a log out, otherwise add a new one
+    var i = 0;
+    while (i < sizeof(sessId)) {
+        if (sessId[i] == "") {
+            sessId[i] = id;
+            sessName[i] = name;
+            return;
+        }
+        i = i + 1;
+    }
+    sessId[sizeof(sessId)] = id;
+    sessName[sizeof(sessName)] = name;
+}
+
+function endSession(id) {
+    var at = findSession(id);
+    if (at >= 0) {
+        sessId[at] = "";
+        sessName[at] = "";
     }
 }
 
@@ -188,37 +251,11 @@ function channelKnown(ch) {
     return false;
 }
 
-// Message list is a ring buffer: arrays can only grow, so once MAX_LOG messages are
-// stored the oldest slot is overwritten. logSlot(k) = slot of the k-th oldest message.
-function logSlot(k) {
-    var pos = logHead + k;
-    return pos % MAX_LOG;
-}
-
-function addLog(channel, user, ts, text) {
-    var slot = 0;
-    if (logN < MAX_LOG) {
-        slot = logN;
-        logN = logN + 1;
-    } else {
-        slot = logHead;
-        var nextHead = logHead + 1;
-        logHead = nextHead % MAX_LOG;
-    }
-    logCh[slot] = channel;
-    logUser[slot] = user;
-    logTs[slot] = ts;
-    logText[slot] = text;
-}
-
 // ------------------------------------------
-// SAVING TO DISK (only used when PERSIST = true)
+// DATABASE
 // ------------------------------------------
-// users.txt     one account per line:  username|password
-// chatlogs.txt  one message per line:  channel|user|timestamp|text
-//
-// These two functions are the only place that touches files. If your Bonezegei
-// build names its file functions differently, change them here and nowhere else.
+var db = sqlite(DB_FILE);
+
 function fileRead(path) {
     return readFile(path);          // should return the whole file as text ("" if missing)
 }
@@ -227,31 +264,59 @@ function fileWrite(path, text) {
     writeFile(path, text);          // should replace the file with `text`
 }
 
-function saveUsers() {
-    if (!PERSIST) {
-        return;
-    }
-    var out = "";
-    var i = 0;
-    while (i < sizeof(userName)) {
-        out = out + userName[i] + "|" + userPass[i] + "\n";
-        i = i + 1;
-    }
-    fileWrite(USERS_FILE, out);
+// BSL_SQLite closes the database for good the first time ANY statement fails, and after
+// that every query quietly returns nothing (so logins fail and history is empty).
+// dbExec / dbQuery are the only places that talk to the database. dbExec reports a
+// failing statement in the console and reopens the database so one bad statement
+// can't take everything down.
+function dbReopen() {
+    db = sqlite(DB_FILE);
 }
 
-function saveLogs() {
-    if (!PERSIST) {
-        return;
+// true if the statement worked
+function dbExec(sql) {
+    var r = db.exec(sql);
+    if (r != 1) {
+        print("SQL ERROR (database reopened) in: " + substr(sql, 0, 50));
+        dbReopen();
+        return false;
     }
-    var out = "";
+    return true;
+}
+
+// rows of a SELECT (an array of row objects, empty if nothing matched)
+function dbQuery(sql) {
+    return db.query(sql);
+}
+
+function createTables() {
+    // username is UNIQUE and COLLATE NOCASE: "Drei" and "drei" are the same account
+    dbExec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(16) NOT NULL UNIQUE COLLATE NOCASE, password VARCHAR(100) NOT NULL, created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')));");
+    dbExec("CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(32) NOT NULL UNIQUE);");
+    dbExec("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL REFERENCES channels(id), user_id INTEGER NOT NULL REFERENCES users(id), ts INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL);");
+    dbExec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages (channel_id, id);");
+
+    // one row per channel in CHANNELS
     var i = 0;
-    while (i < logN) {
-        var at = logSlot(i);
-        out = out + logCh[at] + "|" + logUser[at] + "|" + logTs[at] + "|" + logText[at] + "\n";
+    while (i < sizeof(CHANNELS)) {
+        dbExec("INSERT OR IGNORE INTO channels (name) VALUES (" + sqlStr(CHANNELS[i]) + ");");
         i = i + 1;
     }
-    fileWrite(LOGS_FILE, out);
+}
+
+// ts must be digits only (it is placed in SQL as a number); anything else becomes 0
+function cleanTs(ts) {
+    if (onlyChars(ts, DIGITS, 15)) {
+        return ts;
+    }
+    return "0";
+}
+
+// Stores one message. `user` must be an existing username, `channel` a name from CHANNELS.
+function addLog(channel, user, ts, text) {
+    return dbExec("INSERT INTO messages (channel_id, user_id, ts, text) VALUES ((SELECT id FROM channels WHERE name = "
+            + sqlStr(channel) + "), (SELECT id FROM users WHERE username = " + sqlStr(user) + "), "
+            + cleanTs(ts) + ", " + sqlStr(text) + ");");
 }
 
 // ------------------------------------------
@@ -266,14 +331,17 @@ function doSignup(clientId, id, name, password) {
         reply(clientId, "AUTHERR", id, "Please choose a password.", "");
         return;
     }
-    if (findUser(name) >= 0) {
+    var taken = dbQuery("SELECT id FROM users WHERE username = " + sqlStr(name) + ";");
+    if (rowCount(taken) > 0) {
         reply(clientId, "AUTHERR", id, "That username is already registered.", "");
         return;
     }
 
-    userName[sizeof(userName)] = name;
-    userPass[sizeof(userPass)] = password;
-    saveUsers();
+    var saved = dbExec("INSERT INTO users (username, password) VALUES (" + sqlStr(name) + ", " + sqlStr(password) + ");");
+    if (!saved) {
+        reply(clientId, "AUTHERR", id, "Could not save your account. Check the server window.", "");
+        return;
+    }
     print("New user confirmed: " + name);
 
     startSession(id, name);
@@ -281,18 +349,31 @@ function doSignup(clientId, id, name, password) {
 }
 
 function doLogin(clientId, id, name, password) {
-    var at = findUser(name);
-    // (|| and && do not short-circuit in BSL, so check the index first on its own)
-    if (at < 0) {
+    var rows = dbQuery("SELECT username, password FROM users WHERE username = " + sqlStr(name) + ";");
+    if (rowCount(rows) < 1) {
+        print("Login refused: no account named " + name);
         reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
         return;
     }
-    if (userPass[at] != password) {
+    if (rows[0].password != password) {
+        print("Login refused: wrong password for " + name);
         reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
         return;
     }
-    startSession(id, userName[at]);
-    reply(clientId, "AUTHOK", id, userName[at], "");
+    startSession(id, rows[0].username);
+    reply(clientId, "AUTHOK", id, rows[0].username, "");
+}
+
+// The chat page is a separate page from the login page, so it opens a NEW WebSocket.
+// It asks "RESUME|id||" with the id the login page used; if that login is still known,
+// the answer is AUTHOK with the username (the browser never gets to choose the name).
+function doResume(clientId, id) {
+    var s = findSession(id);
+    if (s < 0) {
+        reply(clientId, "AUTHERR", id, "Your session ended. Please log in again.", "");
+        return;
+    }
+    reply(clientId, "AUTHOK", id, sessName[s], "");
 }
 
 // ------------------------------------------
@@ -317,7 +398,6 @@ function doSave(clientId, id, channel, payload) {
     }
 
     addLog(channel, sessName[s], pair[0], text);
-    saveLogs();
 }
 
 function doHistory(clientId, id) {
@@ -330,56 +410,21 @@ function doHistory(clientId, id) {
     while (c < sizeof(CHANNELS)) {
         var ch = CHANNELS[c];
 
-        // How many saved messages does this channel have?
-        var count = 0;
-        var i = 0;
-        while (i < logN) {
-            if (logCh[logSlot(i)] == ch) {
-                count = count + 1;
-            }
-            i = i + 1;
-        }
+        // Newest HISTORY_PER_CHANNEL messages of this channel (newest first) ...
+        var rows = dbQuery("SELECT u.username AS username, CAST(m.ts AS TEXT) AS ts, m.text AS text FROM messages m "
+                            + "JOIN users u ON u.id = m.user_id JOIN channels c ON c.id = m.channel_id "
+                            + "WHERE c.name = " + sqlStr(ch) + " ORDER BY m.id DESC LIMIT " + HISTORY_PER_CHANNEL + ";");
 
-        // Send only the newest HISTORY_PER_CHANNEL of them, oldest first.
-        var skip = count - HISTORY_PER_CHANNEL;
-        var seen = 0;
-        i = 0;
-        while (i < logN) {
-            var at = logSlot(i);
-            if (logCh[at] == ch) {
-                if (seen >= skip) {
-                    reply(clientId, "HIST", id, logUser[at], ch + "|" + logTs[at] + "|" + logText[at]);
-                }
-                seen = seen + 1;
-            }
-            i = i + 1;
+        // ... sent oldest first.
+        var i = rowCount(rows) - 1;
+        while (i >= 0) {
+            reply(clientId, "HIST", id, rows[i].username, ch + "|" + rows[i].ts + "|" + rows[i].text);
+            i = i - 1;
         }
         c = c + 1;
     }
     reply(clientId, "HISTEND", id, "", "");
 }
-
-// ------------------------------------------
-// LOADING FROM DISK (only used when PERSIST = true)
-// ------------------------------------------
-// Takes the first line off `text`; returns [line, restOfText].
-function nextLine(text) {
-    var nl = indexOfChar(text, "\n", 0);
-    var line = text;
-    var rest = "";
-    if (nl >= 0) {
-        line = substr(text, 0, nl);
-        rest = substr(text, nl + 1);
-    }
-    var n = sizeof(line);
-    if (n > 0) {
-        if (line[n - 1] == "\r") {
-            line = substr(line, 0, n - 1);
-        }
-    }
-    return [line, rest];
-}
-
 
 // ------------------------------------------
 // PICTURES (saved so they come back after a restart / re-login)
@@ -394,8 +439,6 @@ var IMAGES_DIR = "database/images/";
 var PIC_CHUNK = 1500;
 var IMG_MARK = "[img]";
 var ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
-var DIGITS = "0123456789";
-
 var pendId = [];      // picId being received ("" = free slot)
 var pendOwner = [];   // tab id of the sender
 var pendUser = [];
@@ -421,25 +464,6 @@ function splitAll(s) {
     }
     out[sizeof(out)] = rest;
     return out;
-}
-
-// true if `s` is 1..maxLen characters, all taken from `allowed`
-function onlyChars(s, allowed, maxLen) {
-    var n = sizeof(s);
-    if (n < 1) {
-        return false;
-    }
-    if (n > maxLen) {
-        return false;
-    }
-    var i = 0;
-    while (i < n) {
-        if (indexOfChar(allowed, s[i], 0) < 0) {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
 }
 
 function mimeOk(m) {
@@ -562,15 +586,16 @@ function picChunk(id, payload) {
     pendGot[at] = pendGot[at] + 1;
 
     if (("" + pendGot[at]) == pendTotal[at]) {
-        if (!PERSIST) {
-            freePending(at);       // pictures are only kept when saving is on
-            return;
-        }
+        print("Picture " + picId + " received (" + sizeof(pendData[at]) + " characters), writing file...");
         fileWrite(IMAGES_DIR + picId + ".txt", pendMime[at] + "|" + pendSize[at] + "\n" + pendData[at]);
-        addLog(pendCh[at], pendUser[at], pendTs[at],
+        print("Picture file written, saving it to the database...");
+        var logged = addLog(pendCh[at], pendUser[at], pendTs[at],
                IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at]);
-        saveLogs();
-        print("Saved picture " + picId + " from " + pendUser[at]);
+        if (logged) {
+            print("Saved picture " + picId + " from " + pendUser[at]);
+        } else {
+            print("Picture " + picId + " from " + pendUser[at] + " was NOT saved to the database");
+        }
         freePending(at);
     }
 }
@@ -611,34 +636,14 @@ function sendPicture(clientId, id, picId) {
     }
 }
 
-function loadAll() {
-    if (!PERSIST) {
-        return;
-    }
-    var text = fileRead(USERS_FILE);
-    while (sizeof(text) > 0) {
-        var l1 = nextLine(text);
-        text = l1[1];
-        if (sizeof(l1[0]) > 0) {
-            var u = parsePair(l1[0]);       // username | password (password may contain "|")
-            userName[sizeof(userName)] = u[0];
-            userPass[sizeof(userPass)] = u[1];
-        }
-    }
-
-    text = fileRead(LOGS_FILE);
-    while (sizeof(text) > 0) {
-        var l2 = nextLine(text);
-        text = l2[1];
-        if (sizeof(l2[0]) > 0) {
-            var m = parsePacket(l2[0]);     // channel | user | timestamp | text
-            addLog(m[0], m[1], m[2], m[3]);
-        }
-    }
-    print("Loaded " + sizeof(userName) + " user(s) and " + logN + " saved message(s).");
+createTables();
+var cu = dbQuery("SELECT COUNT(*) AS n FROM users;");
+var cm = dbQuery("SELECT COUNT(*) AS n FROM messages;");
+if (rowCount(cu) > 0 && rowCount(cm) > 0) {
+    print("Database ready: " + DB_FILE + " (" + cu[0].n + " user(s), " + cm[0].n + " message(s))");
+} else {
+    print("ERROR: database " + DB_FILE + " is not working. Check that the database folder exists.");
 }
-
-loadAll();
 
 // ==========================================
 // HTTP EVENT HANDLERS
@@ -647,14 +652,25 @@ loadAll();
 server.get = function (path, data){
     print("get loc:" + path );
 
-    if(path == "/"){
-        server.sendFile("public/index.html");
+    // Login / sign up page
+    if(path == "/" || path == "/login" || path == "/login.html"){
+        server.sendFile("public/login.html");
+    }
+    // Chat page (the page itself sends you back to the login page if you are not logged in)
+    else if(path == "/chat" || path == "/chat.html"){
+        server.sendFile("public/chat.html");
     }
     else if(path == "/style.css"){
         server.sendFile("public/style.css");
     }
-    else if(path == "/app.js"){
-        server.sendFile("public/app.js");
+    else if(path == "/common.js"){
+        server.sendFile("public/common.js");
+    }
+    else if(path == "/login.js"){
+        server.sendFile("public/login.js");
+    }
+    else if(path == "/chat.js"){
+        server.sendFile("public/chat.js");
     }
     else{
         server.sendFile("public/404.html");
@@ -695,6 +711,14 @@ server.onData = function (message, clientId) {
         } else {
             doLogin(clientId, a[1], a[2], a[3]);
         }
+    }
+    else if (type == "RESUME") {
+        var rs = parsePacket(message);         // type, id
+        doResume(clientId, rs[1]);
+    }
+    else if (type == "LOGOUT") {
+        var lo = parsePacket(message);         // type, id
+        endSession(lo[1]);
     }
     else if (type == "SAVE") {
         var b = parsePacket(message);          // type, id, channel, timestamp|text

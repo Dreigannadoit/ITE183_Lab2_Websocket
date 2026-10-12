@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatterbox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- ===================== LOADING (shown until the server confirms your login) ===================== -->
+    <main id="joinScreen" class="screen active">
+        <section class="join-card">
+            <svg class="mascot" viewBox="0 0 120 110" aria-hidden="true">
+                <path
+                    d="M20 10 H100 Q112 10 112 22 V66 Q112 78 100 78 H66 L46 100 L48 78 H20 Q8 78 8 66 V22 Q8 10 20 10 Z"
+                    fill="#FFD23F" stroke="#1B1230" stroke-width="6" stroke-linejoin="round" />
+                <ellipse cx="40" cy="40" rx="7" ry="10" fill="#1B1230" />
+                <ellipse cx="80" cy="40" rx="7" ry="10" fill="#1B1230" />
+                <circle cx="42" cy="35" r="3" fill="#fff" />
+                <circle cx="82" cy="35" r="3" fill="#fff" />
+                <circle cx="26" cy="56" r="6" fill="#FF6FA5" />
+                <circle cx="94" cy="56" r="6" fill="#FF6FA5" />
+                <path d="M46 55 Q60 68 74 55" fill="none" stroke="#1B1230" stroke-width="5" stroke-linecap="round" />
+            </svg>
+
+            <h1 class="logo">Chatterbox</h1>
+            <p class="tagline">Getting your chat ready...</p>
+            <div class="join-actions">
+                <span id="joinStatus" class="pill" data-state="connecting"><span class="dot"></span><span
+                        class="txt">Connecting</span></span>
+            </div>
+        </section>
+    </main>
+
+    <!-- ===================== CHAT ===================== -->
+    <div id="chatScreen" class="screen">
+        <nav id="channels" class="channels" aria-label="Channels">
+            <div class="brand">
+                <h1>Chatterbox</h1>
+            </div>
+            <div class="chan-scroll">
+                <h2 class="section">Text channels</h2>
+                <ul id="channelList" class="channel-list"></ul>
+            </div>
+            <div class="usercard">
+                <div id="meAvatar" class="avatar"></div>
+                <div class="who">
+                    <b id="meName"></b>
+                    <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span
+                            class="txt">Connecting</span></span>
+                </div>
+                <button id="logoutBtn" class="btn small" type="button" title="Log out">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                        class="bi bi-box-arrow-right" viewBox="0 0 16 16">
+                        <path fill-rule="evenodd"
+                            d="M10 12.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v2a.5.5 0 0 0 1 0v-2A1.5 1.5 0 0 0 9.5 2h-8A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-2a.5.5 0 0 0-1 0z" />
+                        <path fill-rule="evenodd"
+                            d="M15.854 8.354a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708.708L14.293 7.5H5.5a.5.5 0 0 0 0 1h8.793l-2.147 2.146a.5.5 0 0 0 .708.708z" />
+                    </svg>
+                </button>
+            </div>
+        </nav>
+
+        <section class="main">
+            <header class="chanbar">
+                <button id="chanBtn" class="btn small nav-btn" type="button" aria-expanded="false"
+                    aria-controls="channels">Channels</button>
+                <span class="hash" aria-hidden="true">#</span>
+                <h2 id="chanName">general</h2>
+                <span id="chanTopic" class="topic"></span>
+                <span class="spacer"></span>
+                <button id="whoBtn" class="btn small nav-btn" type="button" aria-expanded="false"
+                    aria-controls="panel">Who's here</button>
+            </header>
+
+            <div id="log" class="log" role="log" aria-live="polite">
+                <div id="welcome" class="welcome">
+                    <div class="big" aria-hidden="true">#</div>
+                    <h3 id="welcomeTitle"></h3>
+                    <p id="welcomeText"></p>
+                </div>
+                <div id="typing" class="typing" hidden>
+                    <div class="typing-bubble" aria-hidden="true"><i></i><i></i><i></i></div>
+                    <small id="typingText"></small>
+                </div>
+            </div>
+
+            <div id="dropHint" class="drop-hint" hidden>Drop a picture to send it</div>
+
+            <form id="chatForm" class="composer" autocomplete="off">
+                <button id="attachBtn" class="btn attach" type="button" aria-label="Send a picture"
+                    title="Send a picture (you can also paste or drop one)" disabled>
+                    <svg viewBox="0 0 28 28" width="28" height="28" aria-hidden="true">
+                        <rect x="3" y="5" width="22" height="18" rx="4" fill="#fff" stroke="#1B1230"
+                            stroke-width="2.5" />
+                        <circle cx="10" cy="11" r="2.6" fill="#FFD23F" stroke="#1B1230" stroke-width="1.6" />
+                        <path d="M5 21 L12 14 L16 18 L19 15 L24 21 Z" fill="#35D07F" stroke="#1B1230" stroke-width="2"
+                            stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <input id="fileInput" type="file" accept="image/*" multiple hidden>
+                <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Message #general"
+                    maxlength="300" disabled>
+                <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
+            </form>
+        </section>
+
+        <aside id="panel" class="panel" aria-label="People online">
+            <h2>Online (<span id="count">0</span>)</h2>
+            <ul id="users"></ul>
+        </aside>
+
+        <div id="scrim" class="scrim"></div>
+    </div>
+
+    <div id="lightbox" class="lightbox" hidden>
+        <button id="lbClose" class="btn small" type="button">Close</button>
+        <img id="lbImg" alt="Picture preview">
+    </div>
+
+    <!-- ===================== CONSOLE ===================== -->
+    <aside id="console" class="console" aria-label="Connection console">
+        <div class="console-bar">
+            <span id="consoleGrip" class="console-grip" role="button" tabindex="0"
+                aria-label="Move console. Drag it, or use the arrow keys. Press Escape to reset."
+                title="Drag to move. Double-click to reset."></span>
+            <button id="consoleToggle" class="console-toggle" type="button" aria-expanded="false"
+                aria-controls="consoleBody" aria-label="Console" title="Console">
+                <span class="term-icon" aria-hidden="true">&gt;_</span>
+                <span class="chev" aria-hidden="true">&#9650;</span>
+                <span class="lbl">Console</span>
+            </button>
+            <button id="consoleClear" class="console-clear" type="button">Clear</button>
+        </div>
+        <div id="consoleBody" class="console-body" role="log" inert></div>
+    </aside>
+
+    <script src="common.js"></script>
+    <script src="chat.js"></script>
+</body>
+
+</html>
