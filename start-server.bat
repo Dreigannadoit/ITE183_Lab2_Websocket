@@ -12,6 +12,9 @@ echo    Chatterbox - Local Network Server
 echo ==========================================
 echo.
 
+rem ---- 0. Saved pictures live in database\images ----
+if not exist "database\images" mkdir "database\images"
+
 rem ---- 1. Make sure the interpreter and script exist ----
 where bonezegei >nul 2>&1
 if errorlevel 1 (
@@ -75,4 +78,4 @@ echo.
 echo [!] The server stopped. Restarting in 3 seconds. Press Ctrl+C to quit.
 timeout /t 3 /nobreak >nul
 echo.
-goto run
+goto run

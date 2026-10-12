@@ -58,7 +58,7 @@ const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = 
 // ---------- console (shows what travels over the socket) ----------
 const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING", "IMGH", "IMGC"];
 // Packets too chatty (or too private, like passwords) to list in the console.
-const QUIET_TYPES = ["TYPING", "IMGC", "SIGNUP", "LOGIN", "SAVE", "HISTORY", "HIST", "HISTEND", "AUTHOK", "AUTHERR", "SAVEERR"];
+const QUIET_TYPES = ["TYPING", "IMGC", "IMGGET", "PICH", "PICC", "SIGNUP", "LOGIN", "SAVE", "HISTORY", "HIST", "HISTEND", "AUTHOK", "AUTHERR", "SAVEERR"];
 const HISTORY_WAIT_MS = 5000;      // how long we wait for saved chat before joining anyway
 const AUTH_WAIT_MS = 5000;         // how long we wait for log in / sign up to be answered
 let warnedUnknown = false;
@@ -898,6 +898,10 @@ function applyPicState(fig, item) {
     if (item.status === "receiving" || item.status === "sending") {
         setPicState(fig, "transfer", (item.status === "sending" ? "Sending " : "Receiving ") + pct + "%");
         fig.querySelector(".pic-bar b").style.width = pct + "%";
+    } else if (item.status === "saved") {
+        dropSrc(fig);
+        setPicState(fig, "unloaded", "Loading...");
+        requestLoad(fig);
     } else if (item.status === "failed") {
         dropSrc(fig);
         setPicState(fig, "failed", item.failText || "Picture didn't arrive");
@@ -944,6 +948,7 @@ function dropSrc(fig) {
 // On screen (or about to be): put the picture in memory and show it.
 function showPic(fig) {
     const item = images.get(fig.dataset.img);
+    if (item && item.status === "saved") { fetchSaved(item); return; }
     if (!item || item.status !== "ready" || !item.blob) return;
     const img = fig.querySelector("img");
     if (img.getAttribute("src")) return;   // already loaded or loading
@@ -984,7 +989,7 @@ function trimPictures() {
         if (storedBytes <= MAX_STORE_BYTES) break;
         storedBytes -= it.blob.size;
         it.blob = null;
-        it.status = "expired";
+        it.status = it.saved ? "saved" : "expired";
         releaseUrl(it.imgId);
         updatePicUI(it);
     }
@@ -1034,15 +1039,20 @@ function onImageHeader(m) {
 
 function onImageChunk(m) {
     if (m.id === myId) return;
-    const k1 = m.payload.indexOf("|");
-    const k2 = m.payload.indexOf("|", k1 + 1);
+    acceptChunk(m.payload);
+}
+
+// payload is  picId|index|base64data  (live from another person, or PICC from the server)
+function acceptChunk(payload) {
+    const k1 = payload.indexOf("|");
+    const k2 = payload.indexOf("|", k1 + 1);
     if (k1 < 1 || k2 < 0) return;
-    const tr = incoming.get(m.payload.slice(0, k1));
+    const tr = incoming.get(payload.slice(0, k1));
     if (!tr) return;                                 // we joined mid-transfer: skip it
-    const index = +m.payload.slice(k1 + 1, k2);
+    const index = +payload.slice(k1 + 1, k2);
     if (!(index >= 0 && index < tr.total) || tr.parts[index] !== undefined) return;
 
-    tr.parts[index] = m.payload.slice(k2 + 1);
+    tr.parts[index] = payload.slice(k2 + 1);
     tr.got++;
     tr.item.progress = tr.got / tr.total;
     clearTimeout(tr.timer);
@@ -1179,7 +1189,7 @@ async function sendImage(file, ch) {
     addItem(ch, item);
 
     try {
-        const header = [ch, picId, parts.length, pic.mime, pic.blob.size, pic.w, pic.h].join("|");
+        const header = [ch, picId, parts.length, pic.mime, pic.blob.size, pic.w, pic.h, item.ts].join("|");
         if (!sendPacket("IMGH", myId, myName, header)) throw new Error("Not connected.");
         for (let i = 0; i < parts.length; i++) {
             while (socket && socket.bufferedAmount > 256 * 1024) await sleep(20);
@@ -1390,6 +1400,27 @@ function handleServerReply(m) {
         finishHistory();
         return true;
     }
+    if (m.type === "PICH") {
+        // name = picId, payload = packets|mime|bytes   (a saved picture is on its way)
+        const f = m.payload.split("|");
+        const item = images.get(m.name);
+        const total = +f[0];
+        if (item && total >= 1 && total <= 2000) {
+            const old = incoming.get(m.name);
+            if (old) clearTimeout(old.timer);
+            incoming.set(m.name, { item, parts: new Array(total), got: 0, total,
+                                   timer: setTimeout(() => failPicture(m.name, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) });
+        }
+        return true;
+    }
+    if (m.type === "PICC") {
+        acceptChunk(m.name + "|" + m.payload);       // name = picId, payload = index|data
+        return true;
+    }
+    if (m.type === "PICERR") {
+        failPicture(m.name, "Picture is no longer saved");
+        return true;
+    }
     if (m.type === "SAVEERR") {
         logLine("System", "Message not saved: " + m.name);
         addSystem("Your login expired, so new messages aren't being saved. Log out and back in.", current);
@@ -1440,16 +1471,44 @@ function finishHistory() {
     clearTimeout(historyTimer);
     if (historyBuf) {
         CHANNELS.forEach((c) => {
-            store[c.id].items = (historyBuf[c.id] || []).map((m) => ({
-                kind: "msg", id: same(m.user, myName) ? myId : "h:" + m.user.toLowerCase(),
-                name: m.user, text: m.text, ts: m.ts, mention: false
-            }));
+            store[c.id].items = (historyBuf[c.id] || []).map((m) => {
+                const who = same(m.user, myName) ? myId : "h:" + m.user.toLowerCase();
+                return savedPicture(m, who) || {
+                    kind: "msg", id: who, name: m.user, text: m.text, ts: m.ts, mention: false
+                };
+            });
         });
     }
     historyBuf = null;
     const done = historyDone;
     historyDone = null;
     if (done) done();
+}
+
+// A saved picture is stored in the chat log as  [img]picId,mime,bytes,width,height
+// Build a picture item that fetches its data from the server when it scrolls into view.
+function savedPicture(m, who) {
+    if (m.text.slice(0, 5) !== "[img]") return null;
+    const f = m.text.slice(5).split(",");
+    const picId = f[0], mime = f[1], size = +f[2], w = +f[3], h = +f[4];
+    if (!picId || IMAGE_TYPES.indexOf(mime) < 0 || !(size > 0) || !(w >= 1) || !(h >= 1)) return null;
+    const item = { kind: "img", id: who, name: m.user, ts: m.ts, imgId: picId, mime, size, w, h,
+                   status: "saved", saved: true, progress: 0, blob: null };
+    images.set(picId, item);
+    return item;
+}
+
+// Ask the server for a saved picture (answered with PICH, PICC ..., see handleServerReply).
+function fetchSaved(item) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    item.status = "receiving";
+    item.progress = 0;
+    updatePicUI(item);
+    sendPacket("IMGGET", myId, myName, item.imgId);
+    // if the server never answers, show the usual "didn't arrive" state
+    const tr = { item, parts: [], got: 0, total: 0,
+                 timer: setTimeout(() => failPicture(item.imgId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) };
+    incoming.set(item.imgId, tr);
 }
 
 // Tell the server to keep this message (it also reaches everyone live through MSG).
@@ -1474,4 +1533,4 @@ buildChannelList();
 renderChannelHeader();
 updateBadges();
 renderChannel();
-connect();
+connect();

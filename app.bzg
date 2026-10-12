@@ -43,7 +43,7 @@ var MAX_LOG = 2000;               // saved messages kept in total (oldest droppe
 // Saving to disk. Accounts and messages are kept in memory; with PERSIST = true they
 // are also written to the two files below and read back when the server starts.
 // This needs file functions in the interpreter: see fileRead / fileWrite at the bottom.
-var PERSIST = false;
+var PERSIST = true;
 var USERS_FILE = "database/users.txt";
 var LOGS_FILE = "database/chatlogs.txt";
 
@@ -312,6 +312,9 @@ function doSave(clientId, id, channel, payload) {
     if (!channelKnown(channel) || sizeof(text) < 1) {
         return;
     }
+    if (substr(text, 0, 5) == "[img]") {
+        text = " " + text;     // typed text can't pretend to be a saved picture
+    }
 
     addLog(channel, sessName[s], pair[0], text);
     saveLogs();
@@ -377,6 +380,237 @@ function nextLine(text) {
     return [line, rest];
 }
 
+
+// ------------------------------------------
+// PICTURES (saved so they come back after a restart / re-login)
+// ------------------------------------------
+// While a picture is being sent (IMGH header + IMGC pieces, still relayed live to
+// everyone) the server collects the pieces. When the last one arrives it writes
+//     database/images/<picId>.txt      line 1: mime|bytes     rest: the base64 data
+// and adds a normal chat-log entry whose text is   [img]picId,mime,bytes,width,height
+// A client asks for a saved picture with IMGGET and gets PICH + PICC packets back
+// (to that client only). Pictures are only loaded when they scroll into view.
+var IMAGES_DIR = "database/images/";
+var PIC_CHUNK = 1500;
+var IMG_MARK = "[img]";
+var ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
+var DIGITS = "0123456789";
+
+var pendId = [];      // picId being received ("" = free slot)
+var pendOwner = [];   // tab id of the sender
+var pendUser = [];
+var pendCh = [];
+var pendMime = [];
+var pendSize = [];
+var pendW = [];
+var pendH = [];
+var pendTs = [];
+var pendTotal = [];   // number of pieces, kept as text
+var pendGot = [];     // pieces received so far
+var pendData = [];    // base64 collected so far
+
+// every field of  a|b|c|...  (the last field keeps nothing special: plain split)
+function splitAll(s) {
+    var out = [];
+    var rest = s;
+    var k = indexOfChar(rest, "|", 0);
+    while (k >= 0) {
+        out[sizeof(out)] = substr(rest, 0, k);
+        rest = substr(rest, k + 1);
+        k = indexOfChar(rest, "|", 0);
+    }
+    out[sizeof(out)] = rest;
+    return out;
+}
+
+// true if `s` is 1..maxLen characters, all taken from `allowed`
+function onlyChars(s, allowed, maxLen) {
+    var n = sizeof(s);
+    if (n < 1) {
+        return false;
+    }
+    if (n > maxLen) {
+        return false;
+    }
+    var i = 0;
+    while (i < n) {
+        if (indexOfChar(allowed, s[i], 0) < 0) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+function mimeOk(m) {
+    return m == "image/jpeg" || m == "image/png" || m == "image/gif" || m == "image/webp";
+}
+
+function findPending(picId) {
+    var i = 0;
+    while (i < sizeof(pendId)) {
+        if (pendId[i] == picId) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+function freePending(i) {
+    pendId[i] = "";
+    pendOwner[i] = "";
+    pendData[i] = "";
+}
+
+function newPendingSlot() {
+    var i = 0;
+    while (i < sizeof(pendId)) {
+        if (pendId[i] == "") {
+            return i;
+        }
+        i = i + 1;
+    }
+    return sizeof(pendId);
+}
+
+// IMGH|id|name|channel|picId|packets|mime|bytes|width|height|timestamp
+function picHeader(id, payload) {
+    var s = findSession(id);
+    if (s < 0) {
+        return;
+    }
+    // a sender only ever sends one picture at a time: drop anything it left unfinished
+    var j = 0;
+    while (j < sizeof(pendId)) {
+        if (pendOwner[j] == id) {
+            freePending(j);
+        }
+        j = j + 1;
+    }
+    var f = splitAll(payload);
+    if (sizeof(f) < 7) {
+        return;
+    }
+    if (!channelKnown(f[0])) {
+        return;
+    }
+    if (!onlyChars(f[1], ID_CHARS, 24)) {
+        return;
+    }
+    if (!onlyChars(f[2], DIGITS, 3)) {
+        return;
+    }
+    if (!mimeOk(f[3])) {
+        return;
+    }
+    if (!onlyChars(f[4], DIGITS, 6)) {
+        return;
+    }
+    if (!onlyChars(f[5], DIGITS, 4)) {
+        return;
+    }
+    if (!onlyChars(f[6], DIGITS, 4)) {
+        return;
+    }
+    var ts = "0";
+    if (sizeof(f) > 7) {
+        if (onlyChars(f[7], DIGITS, 15)) {
+            ts = f[7];
+        }
+    }
+    var at = newPendingSlot();
+    pendId[at] = f[1];
+    pendOwner[at] = id;
+    pendUser[at] = sessName[s];
+    pendCh[at] = f[0];
+    pendTotal[at] = f[2];
+    pendMime[at] = f[3];
+    pendSize[at] = f[4];
+    pendW[at] = f[5];
+    pendH[at] = f[6];
+    pendTs[at] = ts;
+    pendGot[at] = 0;
+    pendData[at] = "";
+}
+
+// IMGC|id|name|picId|index|base64data
+function picChunk(id, payload) {
+    var k1 = indexOfChar(payload, "|", 0);
+    if (k1 < 0) {
+        return;
+    }
+    var k2 = indexOfChar(payload, "|", k1 + 1);
+    if (k2 < 0) {
+        return;
+    }
+    var picId = substr(payload, 0, k1);
+    var index = substr(payload, k1 + 1, k2 - k1 - 1);
+    var at = findPending(picId);
+    if (at < 0) {
+        return;
+    }
+    if (pendOwner[at] != id) {
+        return;
+    }
+    // pieces arrive in order; anything else means the picture is damaged
+    if (index != ("" + pendGot[at])) {
+        freePending(at);
+        return;
+    }
+    pendData[at] = pendData[at] + substr(payload, k2 + 1);
+    pendGot[at] = pendGot[at] + 1;
+
+    if (("" + pendGot[at]) == pendTotal[at]) {
+        if (!PERSIST) {
+            freePending(at);       // pictures are only kept when saving is on
+            return;
+        }
+        fileWrite(IMAGES_DIR + picId + ".txt", pendMime[at] + "|" + pendSize[at] + "\n" + pendData[at]);
+        addLog(pendCh[at], pendUser[at], pendTs[at],
+               IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at]);
+        saveLogs();
+        print("Saved picture " + picId + " from " + pendUser[at]);
+        freePending(at);
+    }
+}
+
+// IMGGET|id||picId  ->  PICH|id||picId|packets|mime|bytes  then PICC|id||picId|index|data ...
+function sendPicture(clientId, id, picId) {
+    if (findSession(id) < 0) {
+        reply(clientId, "PICERR", id, picId, "");
+        return;
+    }
+    if (!onlyChars(picId, ID_CHARS, 24)) {
+        reply(clientId, "PICERR", id, picId, "");
+        return;
+    }
+    var text = fileRead(IMAGES_DIR + picId + ".txt");
+    if (sizeof(text) < 1) {
+        reply(clientId, "PICERR", id, picId, "");
+        return;
+    }
+    var first = nextLine(text);
+    var info = parsePair(first[0]);        // mime | bytes
+    var data = first[1];
+    var n = sizeof(data);
+
+    var total = 0;
+    var p = 0;
+    while (p < n) {
+        p = p + PIC_CHUNK;
+        total = total + 1;
+    }
+    reply(clientId, "PICH", id, picId, "" + total + "|" + info[0] + "|" + info[1]);
+    var i = 0;
+    p = 0;
+    while (i < total) {
+        reply(clientId, "PICC", id, picId, "" + i + "|" + substr(data, p, PIC_CHUNK));
+        p = p + PIC_CHUNK;
+        i = i + 1;
+    }
+}
+
 function loadAll() {
     if (!PERSIST) {
         return;
@@ -386,7 +620,7 @@ function loadAll() {
         var l1 = nextLine(text);
         text = l1[1];
         if (sizeof(l1[0]) > 0) {
-            var u = parsePacket(l1[0]);     // username | password | (nothing) | (nothing)
+            var u = parsePair(l1[0]);       // username | password (password may contain "|")
             userName[sizeof(userName)] = u[0];
             userPass[sizeof(userPass)] = u[1];
         }
@@ -439,7 +673,7 @@ server.onConnect = function (clientId) {
 };
 
 server.onData = function (message, clientId) {
-    print("Received from Client " + clientId + ": " + message);
+    // (the console shows only short packets; pictures and passwords are not printed)
 
     // Echo the message back to the sender
     //server.send(clientId, "Echo: " + message);
@@ -470,9 +704,24 @@ server.onData = function (message, clientId) {
         var c = parsePacket(message);
         doHistory(clientId, c[1]);
     }
+    else if (type == "IMGGET") {
+        var g = parsePacket(message);          // type, id, (name), picId
+        sendPicture(clientId, g[1], g[3]);
+    }
     else {
+        // Pictures are saved on the way past, then relayed live like everything else.
+        if (type == "IMGH") {
+            var ih = parsePacket(message);     // type, id, name, channel|picId|...
+            picHeader(ih[1], ih[3]);
+        }
+        if (type == "IMGC") {
+            var ic = parsePacket(message);     // type, id, name, picId|index|data
+            picChunk(ic[1], ic[3]);
+        }
         // Live chat: broadcast it to everyone connected.
-        print("Received from Client " + clientId + ": " + type);
+        if (type != "IMGC") {
+            print("Received from Client " + clientId + ": " + type);
+        }
         server.sendAll("User " + clientId + " says: " + message);
     }
 };

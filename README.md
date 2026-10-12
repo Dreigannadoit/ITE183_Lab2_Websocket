@@ -31,6 +31,7 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ├── start-server.bat     # Windows launcher: firewall rule, shows your IP, runs the server
 ├── app.bzg              # The entire server: web page, live chat relay, accounts, saved chat
 ├── database/            # Only used if PERSIST = true in app.bzg
+│   ├── images/          # One .txt per saved picture (base64)
 │   ├── users.txt        # Accounts: username|password (created on first signup)
 │   └── chatlogs.txt     # Saved messages: channel|user|timestamp|text
 ├── package.json
@@ -81,7 +82,7 @@ Older versions of this project stored accounts in `database/users.js` and `chatl
 
 **This is a personal project, so there is no security:** passwords are saved as plain text and the login is tied to the browser tab's random id.
 
-**What is saved:** text messages only. Pictures, join/leave notices and typing dots are live only. Timestamps come from the sender's browser.
+**What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is written to `database/images/<picId>.txt` (base64 text, about 70-220 KB) and listed in `chatlogs.txt` as `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Saving pictures needs `PERSIST = true`. Timestamps come from the sender's browser.
 
 **Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `MAX_LOG`, `PERSIST`. If you add a channel in `public/app.js`, add it to `CHANNELS` there too.
 
@@ -120,7 +121,7 @@ If a message arrives without a known channel in front (for example from an older
 **Settings** are the constants at the top of the script in `public/index.html`: `MAX_DIM`, `MAX_IMG_BYTES`, `CHUNK_CHARS`, `MAX_STORE_BYTES`, `MIN_LOADING_MS`, `HIDDEN_UNLOAD_MS`.
 
 **Limits.**
-- Pictures live only in the browsers that were online when they were sent. Refresh the page and they are gone, and people who join later don't see them.
+- Pictures are saved on the server, so they survive a refresh and people who join later see them. Only pictures sent while the server was running this version are saved.
 - Pictures are compressed, so quality is lower than the original. Transparent PNGs get a white background, and animated GIFs over 160 KB become still.
 - If pictures never show up on your server, it may not accept large packets. Lower `CHUNK_CHARS` to 800, then 400.
 
@@ -137,7 +138,7 @@ If a message arrives without a known channel in front (for example from an older
 
 - Because the server doesn't check anything, a person who edits the page's code could pretend to be someone else. That's fine for a lab or a class demo, but not for real use.
 - If someone's browser crashes (no `BYE`), their name stays in the list for up to 2.5 minutes.
-- Pictures are not saved (only text), so they are gone after a refresh.
+- Picture files are not deleted when the 2000-message limit pushes their entry out of `chatlogs.txt`; delete old files in `database/images/` by hand if the folder grows.
 - With `PERSIST = false`, accounts and saved chat are lost when the server stops.
 - Messages sent by others while your connection was down are not filled in until you log in again.
 
