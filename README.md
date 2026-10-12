@@ -1,4 +1,4 @@
-# BISCORD – Bonezegei WebSocket Chat (ITE183 Lab 2)
+# Chatterbox – Bonezegei WebSocket Chat (ITE183 Lab 2)
 
 A real-time group chat app with a Discord-style layout: channels on the left, the conversation in the middle, and who's online on the right. The whole server is one file written in **Bonezegei Script Language (`.bzg`)**: `app.bzg` serves the page, relays live chat, and handles accounts and saved chat. There is no Node.js. It serves a cartoon-style browser client with heavy outlines and a semi-3D look.
 
@@ -32,7 +32,7 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 ├── app.bzg              # The entire server: web page, live chat relay, accounts, saved chat
 ├── database/
 │   ├── chatterbox.db    # SQLite database: users, channels, messages (created on first run)
-│   └── images/          # One .txt per saved picture (base64)
+│   └── images/          # (no longer used: pictures are stored in chatterbox.db)
 ├── package.json
 ├── lib/
 │   ├── http.bzg         # Loads the native http module
@@ -41,16 +41,11 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 │   ├── sqlite.bzg       # Loads the native SQLite module (BSL_SQLite)
 │   └── sqlite/sqlite.dll
 ├── public/
-<<<<<<< HEAD
 │   ├── login.html       # Login / sign up page (served at /)
 │   ├── login.js         # Login page logic
 │   ├── chat.html        # Main chat page (served at /chat)
 │   ├── chat.js          # Chat page logic
 │   ├── common.js        # Shared by both pages: connection address, login note, console
-=======
-│   ├── index.html       # BISCORD client (join screen + chat screen)
-│   ├── app.js           # Client logic
->>>>>>> 0b170acaad095b2bd67c95379247de7c3ac9b656
 │   ├── style.css        # Cartoon-style theme
 │   └── 404.html
 └── README.md
@@ -97,7 +92,7 @@ On login the server sends the newest `HISTORY_PER_CHANNEL` messages of each chan
 
 **This is a personal project, so there is no security:** passwords are saved as plain text and the login is tied to the browser tab's random id.
 
-**What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is written to `database/images/<picId>.txt` (base64 text, about 70-220 KB) and stored in the `messages` table as the text `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Timestamps come from the sender's browser.
+**What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is saved in the `pictures` table of `chatterbox.db` (one row per 1500-character packet, base64) and referenced from the `messages` table as the text `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Timestamps come from the sender's browser.
 
 **Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `DB_FILE`. If you add a channel in `public/chat.js`, add it to `CHANNELS` there too.
 
@@ -190,13 +185,13 @@ bonezegei app.bzg            # start the server
 and, once, in an **administrator** terminal:
 
 ```bash
-netsh advfirewall firewall add rule name="BISCORD LAN TCP 8000" dir=in action=allow protocol=TCP localport=8000 profile=any
+netsh advfirewall firewall add rule name="Chatterbox LAN TCP 8000" dir=in action=allow protocol=TCP localport=8000 profile=any
 ```
 
 To remove the firewall rule later:
 
 ```bash
-netsh advfirewall firewall delete rule name="BISCORD LAN TCP 8000"
+netsh advfirewall firewall delete rule name="Chatterbox LAN TCP 8000"
 ```
 
 When Windows asks whether to let `bonezegei` through the firewall, allow it.
@@ -217,7 +212,7 @@ Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one por
 
 ## Troubleshooting
 
-- **Console shows messages but the chat area stays empty:** open the Console and look at the `[Server]` lines. BISCORD messages look like `HELLO|...` or `Alice says: Hello`. If you see a `[System] Ignored a message...` line, the server is running an old `app.bzg`. Replace the one in the project root with the relay version and restart. The page also understands the original lab server's `User <n> says: ...` format, so chat still works with it.
+- **Console shows messages but the chat area stays empty:** open the Console and look at the `[Server]` lines. Chatterbox messages look like `HELLO|...` or `Alice says: Hello`. If you see a `[System] Ignored a message...` line, the server is running an old `app.bzg`. Replace the one in the project root with the relay version and restart. The page also understands the original lab server's `User <n> says: ...` format, so chat still works with it.
 
 - **`Attempt to call method on non-object type` when the server runs:** `app.bzg` called a method on a string or array (such as `.indexOf`, `.length` or `.push`). BSL has none, see "Editing app.bzg" below. The line number it reports is often the end of the file, not the real spot.
 - **`Undefined variable <name>` when the server runs:** a function is called before it is defined. Move it above the code that calls it.

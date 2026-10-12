@@ -1,7 +1,7 @@
 {
     "name": "ite183-lab2-websocket",
     "version": "1.0.0",
-    "description": "BISCORD - a Bonezegei WebSocket chat app (server is app.bzg only)",
+    "description": "Chatterbox - a Bonezegei WebSocket chat app (server is app.bzg only)",
     "main": "app.bzg",
     "scripts": {
         "start": "bonezegei app.bzg"

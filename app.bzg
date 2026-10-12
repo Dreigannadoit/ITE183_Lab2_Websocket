@@ -3,7 +3,7 @@ include("lib/sqlite.bzg");
 var server = http(8000);
 
 // ==========================================
-// BISCORD SERVER  (everything lives in this one file, no Node.js)
+// CHATTERBOX SERVER  (everything lives in this one file, no Node.js)
 // ==========================================
 //
 // 1. Serves the web pages           (server.get)  login page "/" and chat page "/chat"
@@ -256,14 +256,6 @@ function channelKnown(ch) {
 // ------------------------------------------
 var db = sqlite(DB_FILE);
 
-function fileRead(path) {
-    return readFile(path);          // should return the whole file as text ("" if missing)
-}
-
-function fileWrite(path, text) {
-    writeFile(path, text);          // should replace the file with `text`
-}
-
 // BSL_SQLite closes the database for good the first time ANY statement fails, and after
 // that every query quietly returns nothing (so logins fail and history is empty).
 // dbExec / dbQuery are the only places that talk to the database. dbExec reports a
@@ -295,6 +287,9 @@ function createTables() {
     dbExec("CREATE TABLE IF NOT EXISTS channels (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(32) NOT NULL UNIQUE);");
     dbExec("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL REFERENCES channels(id), user_id INTEGER NOT NULL REFERENCES users(id), ts INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL);");
     dbExec("CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages (channel_id, id);");
+    // A saved picture is a set of rows, one per packet the browser sent (about 1500 characters of base64 each).
+    dbExec("CREATE TABLE IF NOT EXISTS pictures (id INTEGER PRIMARY KEY AUTOINCREMENT, pic_id VARCHAR(24) NOT NULL, idx INTEGER NOT NULL, mime VARCHAR(16) NOT NULL, bytes INTEGER NOT NULL, chunk TEXT NOT NULL);");
+    dbExec("CREATE INDEX IF NOT EXISTS idx_pictures_pic ON pictures (pic_id, idx);");
 
     // one row per channel in CHANNELS
     var i = 0;
@@ -430,13 +425,12 @@ function doHistory(clientId, id) {
 // PICTURES (saved so they come back after a restart / re-login)
 // ------------------------------------------
 // While a picture is being sent (IMGH header + IMGC pieces, still relayed live to
-// everyone) the server collects the pieces. When the last one arrives it writes
-//     database/images/<picId>.txt      line 1: mime|bytes     rest: the base64 data
-// and adds a normal chat-log entry whose text is   [img]picId,mime,bytes,width,height
+// everyone) the server saves each piece as a row of the "pictures" table, as it arrives
+// (no files are written: this Bonezegei build crashes on writeFile, and no big string is
+// ever built). When the last piece has arrived it adds a normal chat-log entry whose text is
+//     [img]picId,mime,bytes,width,height
 // A client asks for a saved picture with IMGGET and gets PICH + PICC packets back
 // (to that client only). Pictures are only loaded when they scroll into view.
-var IMAGES_DIR = "database/images/";
-var PIC_CHUNK = 1500;
 var IMG_MARK = "[img]";
 var ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
 var pendId = [];      // picId being received ("" = free slot)
@@ -450,7 +444,6 @@ var pendH = [];
 var pendTs = [];
 var pendTotal = [];   // number of pieces, kept as text
 var pendGot = [];     // pieces received so far
-var pendData = [];    // base64 collected so far
 
 // every field of  a|b|c|...  (the last field keeps nothing special: plain split)
 function splitAll(s) {
@@ -484,7 +477,6 @@ function findPending(picId) {
 function freePending(i) {
     pendId[i] = "";
     pendOwner[i] = "";
-    pendData[i] = "";
 }
 
 function newPendingSlot() {
@@ -543,6 +535,10 @@ function picHeader(id, payload) {
             ts = f[7];
         }
     }
+    var have = dbQuery("SELECT id FROM pictures WHERE pic_id = " + sqlStr(f[1]) + " LIMIT 1;");
+    if (rowCount(have) > 0) {
+        return;
+    }
     var at = newPendingSlot();
     pendId[at] = f[1];
     pendOwner[at] = id;
@@ -555,7 +551,6 @@ function picHeader(id, payload) {
     pendH[at] = f[6];
     pendTs[at] = ts;
     pendGot[at] = 0;
-    pendData[at] = "";
 }
 
 // IMGC|id|name|picId|index|base64data
@@ -582,19 +577,28 @@ function picChunk(id, payload) {
         freePending(at);
         return;
     }
-    pendData[at] = pendData[at] + substr(payload, k2 + 1);
+    // the base64 piece is everything after the second "|" (length given explicitly)
+    var piece = substr(payload, k2 + 1, sizeof(payload) - k2 - 1);
+    if (pendGot[at] == 0) {
+        print("Picture " + picId + ": " + pendTotal[at] + " pieces expected, first piece is " + sizeof(piece) + " characters");
+    }
+    var stored = dbExec("INSERT INTO pictures (pic_id, idx, mime, bytes, chunk) VALUES (" + sqlStr(picId) + ", "
+            + pendGot[at] + ", " + sqlStr(pendMime[at]) + ", " + pendSize[at] + ", " + sqlStr(piece) + ");");
+    if (!stored) {
+        print("Picture " + picId + " piece " + index + " was NOT saved, dropping the picture");
+        dbExec("DELETE FROM pictures WHERE pic_id = " + sqlStr(picId) + ";");
+        freePending(at);
+        return;
+    }
     pendGot[at] = pendGot[at] + 1;
 
     if (("" + pendGot[at]) == pendTotal[at]) {
-        print("Picture " + picId + " received (" + sizeof(pendData[at]) + " characters), writing file...");
-        fileWrite(IMAGES_DIR + picId + ".txt", pendMime[at] + "|" + pendSize[at] + "\n" + pendData[at]);
-        print("Picture file written, saving it to the database...");
         var logged = addLog(pendCh[at], pendUser[at], pendTs[at],
                IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at]);
         if (logged) {
-            print("Saved picture " + picId + " from " + pendUser[at]);
+            print("Saved picture " + picId + " from " + pendUser[at] + " (" + pendTotal[at] + " pieces)");
         } else {
-            print("Picture " + picId + " from " + pendUser[at] + " was NOT saved to the database");
+            print("Picture " + picId + " from " + pendUser[at] + " was NOT saved to the chat log");
         }
         freePending(at);
     }
@@ -610,28 +614,16 @@ function sendPicture(clientId, id, picId) {
         reply(clientId, "PICERR", id, picId, "");
         return;
     }
-    var text = fileRead(IMAGES_DIR + picId + ".txt");
-    if (sizeof(text) < 1) {
+    var rows = dbQuery("SELECT mime, bytes, chunk FROM pictures WHERE pic_id = " + sqlStr(picId) + " ORDER BY idx;");
+    var total = rowCount(rows);
+    if (total < 1) {
         reply(clientId, "PICERR", id, picId, "");
         return;
     }
-    var first = nextLine(text);
-    var info = parsePair(first[0]);        // mime | bytes
-    var data = first[1];
-    var n = sizeof(data);
-
-    var total = 0;
-    var p = 0;
-    while (p < n) {
-        p = p + PIC_CHUNK;
-        total = total + 1;
-    }
-    reply(clientId, "PICH", id, picId, "" + total + "|" + info[0] + "|" + info[1]);
+    reply(clientId, "PICH", id, picId, "" + total + "|" + rows[0].mime + "|" + rows[0].bytes);
     var i = 0;
-    p = 0;
     while (i < total) {
-        reply(clientId, "PICC", id, picId, "" + i + "|" + substr(data, p, PIC_CHUNK));
-        p = p + PIC_CHUNK;
+        reply(clientId, "PICC", id, picId, "" + i + "|" + rows[i].chunk);
         i = i + 1;
     }
 }
