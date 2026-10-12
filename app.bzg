@@ -655,14 +655,14 @@ server.get = function (path, data){
     else if(path == "/style.css"){
         server.sendFile("public/style.css");
     }
-    else if(path == "/common.js"){
-        server.sendFile("public/common.js");
+    else if(path == "/scripts/common.js"){
+        server.sendFile("public/scripts/common.js");
     }
-    else if(path == "/login.js"){
-        server.sendFile("public/login.js");
+    else if(path == "/scripts/login.js"){
+        server.sendFile("public/scripts/login.js");
     }
-    else if(path == "/chat.js"){
-        server.sendFile("public/chat.js");
+    else if(path == "/scripts/chat.js"){
+        server.sendFile("public/scripts/chat.js");
     }
     else{
         server.sendFile("public/404.html");

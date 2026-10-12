@@ -1,11 +1,10 @@
-// BISCORD client. Loaded by index.html (must come after the page markup).
+// Chatterbox chat page. Loaded by chat.html, after common.js.
+// Logging in / signing up happens on the login page (login.html + login.js).
+// This page only asks the server "is this tab still logged in?" (RESUME) and, if not,
+// sends you back to the login page.
 
 // ---------- connection ----------
-// Accounts and chat history are handled by the server (app.bzg) over this same WebSocket.
-
-const wsUrl = location.protocol.indexOf("http") === 0
-    ? (location.protocol === "https:" ? "wss://" : "ws://") + location.host
-    : "ws://localhost:8000";
+// Chat history is handled by the server (app.bzg) over this same WebSocket.
 
 const AVATAR_COLORS = ["#35D07F", "#FF6FA5", "#5CCBFF", "#FF8A2B", "#8B5CF6"];
 const CLAIM_MS = 700;        // how long we wait for "taken" replies
@@ -36,14 +35,8 @@ const CHANNELS = [
     { id: "memes", topic: "Only the good stuff" }
 ];
 
-const $ = (id) => document.getElementById(id);
+// joinScreen is the small "getting your chat ready" card; chatScreen is the chat itself.
 const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
-const loginForm = $("loginForm"), signupForm = $("signupForm");
-const loginUser = $("loginUser"), loginPass = $("loginPass"), loginBtn = $("loginBtn"), loginError = $("loginError");
-const signupUser = $("signupUser"), signupPass = $("signupPass"), signupConfirm = $("signupConfirm");
-const signupBtn = $("signupBtn"), signupError = $("signupError");
-const tabLogin = $("tabLogin"), tabSignup = $("tabSignup"), authTagline = $("authTagline");
-const authFields = [loginUser, loginPass, loginBtn, signupUser, signupPass, signupConfirm, signupBtn];
 const msgInput = $("msgInput"), sendBtn = $("sendBtn");
 const logEl = $("log"), usersEl = $("users"), countEl = $("count");
 const panel = $("panel"), whoBtn = $("whoBtn"), chanBtn = $("chanBtn");
@@ -53,163 +46,17 @@ const welcomeEl = $("welcome"), welcomeTitle = $("welcomeTitle"), welcomeText = 
 const typingEl = $("typing"), typingText = $("typingText");
 const attachBtn = $("attachBtn"), fileInput = $("fileInput"), dropHint = $("dropHint");
 const lightbox = $("lightbox"), lbImg = $("lbImg");
-const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 
-// ---------- console (shows what travels over the socket) ----------
+// ---------- packet types ----------
 const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING", "IMGH", "IMGC"];
-// Packets too chatty (or too private, like passwords) to list in the console.
-const QUIET_TYPES = ["TYPING", "IMGC", "IMGGET", "PICH", "PICC", "SIGNUP", "LOGIN", "SAVE", "HISTORY", "HIST", "HISTEND", "AUTHOK", "AUTHERR", "SAVEERR"];
 const HISTORY_WAIT_MS = 5000;      // how long we wait for saved chat before joining anyway
-const AUTH_WAIT_MS = 5000;         // how long we wait for log in / sign up to be answered
+const AUTH_WAIT_MS = 5000;         // how long we wait for the server to confirm the login
 let warnedUnknown = false;
-const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
-function logLine(tag, text) {
-    try { writeLine(tag, text); } catch (err) { /* logging must never break the chat */ }
-}
-
-function writeLine(tag, text) {
-    const stick = consoleBody.scrollHeight - consoleBody.scrollTop - consoleBody.clientHeight < 40;
-    const line = document.createElement("span");
-    line.className = "cl";
-    const label = document.createElement("b");
-    label.className = "tag " + TAG_CLASS[tag];
-    label.textContent = "[" + tag + "]";
-    line.append(label, " " + text);
-    consoleBody.appendChild(line);
-    while (consoleBody.childElementCount > 200) consoleBody.firstElementChild.remove();
-    if (stick) consoleBody.scrollTop = consoleBody.scrollHeight;
-}
-
-// Position state (declared before placeConsole uses it)
-const POS_KEY = "biscord.console";
-let userPlaced = false;   // true once the console has been dragged somewhere
-let drag = null;
-let suppressClick = false;
-
-// Keep the console just above the message box on the chat screen,
-// unless the user has moved it somewhere else.
-function placeConsole() {
-    if (userPlaced) { clampConsole(); return; }
-    const bar = $("chatForm");
-    const chatOn = chatScreen.classList.contains("active");
-    const lift = chatOn ? bar.offsetHeight : 0;
-    // On wide screens, start just right of the channel column.
-    const wide = window.matchMedia ? window.matchMedia("(min-width: 901px)").matches : false;
-    const side = chatOn && wide ? channelsEl.offsetWidth : 0;
-    consoleEl.style.left = (side + 14) + "px";
-    consoleEl.style.bottom = (lift + 14) + "px";
-}
-window.addEventListener("resize", placeConsole);
-if (window.ResizeObserver) new ResizeObserver(placeConsole).observe($("chatForm"));
-
-consoleToggle.addEventListener("click", () => {
-    if (suppressClick) return; // this click was the end of a drag
-    const open = consoleEl.classList.toggle("open");
-    consoleBody.inert = !open;
-    consoleToggle.setAttribute("aria-expanded", open);
-    if (open) consoleBody.scrollTop = consoleBody.scrollHeight;
-    if (userPlaced) clampConsole(); // opening makes it bigger: keep it on screen
-});
-
-// The console grows and shrinks with an animation, so check again once it has stopped moving.
-consoleEl.addEventListener("transitionend", (e) => {
-    if (e.target !== consoleEl && e.target !== consoleBody) return;
-    if (consoleEl.classList.contains("open")) consoleBody.scrollTop = consoleBody.scrollHeight;
-    if (userPlaced) clampConsole();
-});
-$("consoleClear").addEventListener("click", () => consoleBody.replaceChildren());
-
-// ---------- draggable console ----------
-const consoleBar = consoleEl.querySelector(".console-bar");
-const consoleGrip = $("consoleGrip");
-
-// Keep the whole window inside the browser window.
-function clampConsole() {
-    const r = consoleEl.getBoundingClientRect();
-    const left = Math.min(Math.max(0, r.left), Math.max(0, window.innerWidth - r.width));
-    const top = Math.min(Math.max(0, r.top), Math.max(0, window.innerHeight - r.height));
-    consoleEl.style.left = left + "px";
-    consoleEl.style.top = top + "px";
-}
-
-function setConsolePos(left, top) {
-    userPlaced = true;
-    consoleEl.style.left = left + "px";
-    consoleEl.style.top = top + "px";
-    consoleEl.style.bottom = "auto";
-    clampConsole();
-}
-
-function savePos() {
-    try {
-        const r = consoleEl.getBoundingClientRect();
-        localStorage.setItem(POS_KEY, JSON.stringify({ left: r.left, top: r.top }));
-    } catch (err) { /* storage unavailable: position just won't be remembered */ }
-}
-
-function resetPos() {
-    userPlaced = false;
-    consoleEl.style.left = "";
-    consoleEl.style.top = "";
-    try { localStorage.removeItem(POS_KEY); } catch (err) { }
-    placeConsole();
-}
-
-function onDragMove(e) {
-    if (!drag) return;
-    if (!drag.moved) {
-        // ignore tiny wiggles so a normal click still toggles the console
-        if (Math.abs(e.clientX - drag.startX) < 4 && Math.abs(e.clientY - drag.startY) < 4) return;
-        drag.moved = true;
-        consoleEl.classList.add("dragging");
-    }
-    setConsolePos(e.clientX - drag.offX, e.clientY - drag.offY);
-}
-
-function onDragEnd() {
-    window.removeEventListener("pointermove", onDragMove);
-    window.removeEventListener("pointerup", onDragEnd);
-    window.removeEventListener("pointercancel", onDragEnd);
-    if (drag && drag.moved) {
-        consoleEl.classList.remove("dragging");
-        suppressClick = true;
-        setTimeout(() => { suppressClick = false; }, 80);
-        savePos();
-    }
-    drag = null;
-}
-
-consoleBar.addEventListener("pointerdown", (e) => {
-    if (e.button > 0 || e.target.closest("#consoleClear")) return;
-    const r = consoleEl.getBoundingClientRect();
-    drag = { offX: e.clientX - r.left, offY: e.clientY - r.top, startX: e.clientX, startY: e.clientY, moved: false };
-    window.addEventListener("pointermove", onDragMove);
-    window.addEventListener("pointerup", onDragEnd);
-    window.addEventListener("pointercancel", onDragEnd);
-});
-
-// Keyboard: arrow keys move it (Shift for bigger steps), Escape or double-click resets it.
-consoleGrip.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" || e.key === "Home") { e.preventDefault(); resetPos(); return; }
-    const step = e.shiftKey ? 60 : 20;
-    const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
-    if (!move) return;
-    e.preventDefault();
-    const r = consoleEl.getBoundingClientRect();
-    setConsolePos(r.left + move[0], r.top + move[1]);
-    savePos();
-});
-consoleGrip.addEventListener("dblclick", resetPos);
-
-// Remember where it was last time.
-try {
-    const saved = JSON.parse(localStorage.getItem(POS_KEY) || "null");
-    if (saved && isFinite(saved.left) && isFinite(saved.top)) setConsolePos(saved.left, saved.top);
-} catch (err) { }
-
-// Every tab gets its own id, so two people can never be confused.
-const myId = Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
+// The login page gave this tab its id and name. Without them we were never logged in here.
+const stored = loadSession();
+if (!stored) location.replace("/");
+const myId = stored ? stored.id : "";
 
 let socket = null;
 let retryTimer = null;
@@ -217,12 +64,13 @@ let retryDelay = 1000;
 let state = "connecting";
 let joined = false;
 let myName = "";
-let claim = null;            // { name, timer } while we wait to see if a name is free
-let authTimer = null;        // gives up if the server never answers log in / sign up
+let claim = null;            // { id, name, timer } while we wait to see if a name is free
+let authTimer = null;        // gives up if the server never confirms the login
+let resuming = false;        // true while we wait for the server to confirm the login
+let leaving = false;         // true once we are on our way back to the login page
 let historyBuf = null;       // saved messages arriving from the server: channel id -> [msg]
 let historyDone = null;      // called when the last saved message has arrived
 let historyTimer = null;
-let authBusy = false;        // true while a log in / sign up request is running
 const peers = new Map();     // id -> { name, seen }
 const typers = new Map();    // id -> { name, ch, timer }  (people typing right now)
 let iAmTyping = false;
@@ -246,10 +94,6 @@ function setStatus(next) {
         el.querySelector(".txt").textContent = label;
     });
     const online = state === "online";
-    const busy = claim !== null || authBusy;
-    authFields.forEach((el) => { el.disabled = !online || busy; });
-    loginBtn.textContent = busy ? "Please wait..." : "Log in";
-    signupBtn.textContent = busy ? "Please wait..." : "Create account";
     msgInput.disabled = !(online && joined);
     sendBtn.disabled = !(online && joined);
     attachBtn.disabled = !(online && joined);
@@ -282,19 +126,6 @@ function sendRaw(text) {
     return false;
 }
 
-function parse(data) {
-    const parts = [];
-    let rest = data;
-    for (let i = 0; i < 3; i++) {
-        const k = rest.indexOf("|");
-        if (k < 0) { parts.push(rest); rest = ""; continue; }
-        parts.push(rest.slice(0, k));
-        rest = rest.slice(k + 1);
-    }
-    parts.push(rest);
-    return { type: parts[0], id: parts[1], name: parts[2], payload: parts[3] };
-}
-
 // "random|hello"  ->  { ch: "random", text: "hello" }
 // No known channel in front (older page)  ->  #general
 function splitPayload(payload) {
@@ -304,6 +135,49 @@ function splitPayload(payload) {
         if (store[ch]) return { ch, text: payload.slice(k + 1) };
     }
     return { ch: "general", text: payload };
+}
+
+// ---------- connection popup ----------
+// One small popup in the bottom right corner instead of a line in the chat for every retry.
+// "lost": spinner + "Connection lost. Trying to reconnect..." stays up while we keep retrying.
+// "back": tick + "Reconnected", then it slides away on its own.
+const connToast = $("connToast"), connText = $("connText");
+const TOAST_BACK_MS = 1800;   // how long "Reconnected" stays before it leaves
+const TOAST_EXIT_MS = 320;    // a little longer than the exit animation
+let toastTimer = null, toastExitTimer = null;
+
+// Sit just above the message box so it never covers the Send button.
+function placeToast() {
+    connToast.style.bottom = (($("chatForm").offsetHeight || 0) + 14) + "px";
+}
+window.addEventListener("resize", placeToast);
+if (window.ResizeObserver) new ResizeObserver(placeToast).observe($("chatForm"));
+
+function showConnToast(kind, text) {
+    clearTimeout(toastTimer);
+    clearTimeout(toastExitTimer);
+    connToast.dataset.state = kind;
+    connText.textContent = text;
+    placeToast();
+    if (connToast.hidden || connToast.classList.contains("leaving")) {
+        // (re)start the entrance animation. Already showing: just change the text and icon.
+        connToast.classList.remove("leaving", "entering");
+        connToast.hidden = false;
+        void connToast.offsetWidth;
+        connToast.classList.add("entering");
+    }
+}
+
+function hideConnToast() {
+    clearTimeout(toastTimer);
+    if (connToast.hidden) return;
+    connToast.classList.remove("entering");
+    connToast.classList.add("leaving");
+    clearTimeout(toastExitTimer);
+    toastExitTimer = setTimeout(() => {
+        connToast.hidden = true;
+        connToast.classList.remove("leaving");
+    }, TOAST_EXIT_MS);
 }
 
 function connect() {
@@ -320,9 +194,12 @@ function connect() {
             // Connection came back: tell everyone we're still here.
             resetPeers();
             sendPacket("HELLO", myId, myName, "re");
-            addSystem("Reconnected.", current);
-        } else if (!loginForm.hidden) {
-            loginUser.focus();
+            if (!connToast.hidden) {
+                showConnToast("back", "Reconnected");
+                toastTimer = setTimeout(hideConnToast, TOAST_BACK_MS);
+            }
+        } else if (!resuming) {
+            resumeSession();
         }
     };
 
@@ -351,7 +228,7 @@ function connect() {
         if (PACKET_TYPES.indexOf(m.type) < 0) {
             if (!warnedUnknown) {
                 warnedUnknown = true;
-                logLine("System", "Ignored a message that isn't a BISCORD packet. If the chat stays empty, make sure the server is running the new app.bzg.");
+                logLine("System", "Ignored a message that isn't a Chatterbox packet. If the chat stays empty, make sure the server is running the new app.bzg.");
             }
             return;
         }
@@ -359,14 +236,15 @@ function connect() {
     };
 
     socket.onclose = () => {
+        if (leaving) return;
         if (claim) { clearTimeout(claim.timer); claim = null; }
-        if (authBusy) failAuth("Connection lost. Try again in a moment.");
+        if (!joined) { clearTimeout(authTimer); resuming = false; }   // ask again once we reconnect
         if (historyDone) finishHistory();
         cancelTyping();
         clearAllTypers();
         setStatus("offline");
         logLine("System", "Connection closed. Retrying in " + (retryDelay / 1000) + "s ...");
-        if (joined) addSystem("Connection lost. Trying to reconnect...", current);
+        if (joined) showConnToast("lost", "Connection lost. Trying to reconnect...");
         retryTimer = setTimeout(connect, retryDelay);
         retryDelay = Math.min(retryDelay * 2, 10000);
     };
@@ -379,16 +257,17 @@ function handle(data) {
     const m = parse(data);
 
     // Username checks work before we have joined.
+    // (a claim carries its own one-off id, so a second tab of the same login can't hide behind it)
     if (m.type === "CLAIM") {
-        if (m.id === myId) return;
+        if (claim && m.id === claim.id) return;     // our own claim, echoed back
         const owner = joined && same(m.name, myName);
         // If two people claim the same name at once, the lower id wins.
-        const tie = claim && same(m.name, claim.name) && myId < m.id;
+        const tie = claim && same(m.name, claim.name) && claim.id < m.id;
         if (owner || tie) sendPacket("TAKEN", m.id, m.name, "");
         return;
     }
     if (m.type === "TAKEN") {
-        if (claim && m.id === myId && same(m.name, claim.name)) failClaim();
+        if (claim && m.id === claim.id && same(m.name, claim.name)) failClaim();
         return;
     }
 
@@ -514,18 +393,33 @@ function renderTyping() {
     if (stick) logEl.scrollTop = logEl.scrollHeight;
 }
 
+// Leaves this page for the login page. `text` is shown there once.
+function leaveToLogin(text) {
+    leaving = true;
+    clearTimeout(authTimer);
+    clearSession();
+    if (text) setFlash(text);
+    location.replace("/");
+}
+
+// The server confirmed who we are. Make sure nobody is already online under this name.
 function startClaim(name) {
-    claim = { name, timer: setTimeout(finishClaim, CLAIM_MS) };
-    clearAuthErrors();
-    setStatus(state);
-    sendPacket("CLAIM", myId, name, "");
+    claim = { id: newId(), name, timer: setTimeout(finishClaim, CLAIM_MS) };
+    sendPacket("CLAIM", claim.id, name, "");
 }
 
 function failClaim() {
     clearTimeout(claim.timer);
     claim = null;
-    setStatus(state);
-    showAuthError("That account is already online in another tab or device.");
+    leaveToLogin("That account is already online in another tab or device.");
+}
+
+// Ask the server whether the login this tab holds is still good (answered with AUTHOK or AUTHERR).
+function resumeSession() {
+    resuming = true;
+    clearTimeout(authTimer);
+    authTimer = setTimeout(() => leaveToLogin("The server didn't answer. Is app.bzg running?"), AUTH_WAIT_MS);
+    sendPacket("RESUME", myId, "", "");
 }
 
 async function finishClaim() {
@@ -1326,65 +1220,18 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------- events ----------
-// ---------- accounts ----------
-function showAuthError(text) {
-    const box = loginForm.hidden ? signupError : loginError;
-    box.textContent = text;
-    box.hidden = false;
-}
-
-function clearAuthErrors() {
-    loginError.hidden = true;
-    signupError.hidden = true;
-}
-
-function showAuthTab(which) {
-    const login = which === "login";
-    loginForm.hidden = !login;
-    signupForm.hidden = login;
-    tabLogin.classList.toggle("active", login);
-    tabSignup.classList.toggle("active", !login);
-    tabLogin.setAttribute("aria-selected", login);
-    tabSignup.setAttribute("aria-selected", !login);
-    authTagline.textContent = login ? "Welcome back! Log in to jump in." : "New here? Make an account.";
-    clearAuthErrors();
-    (login ? loginUser : signupUser).focus();
-}
-tabLogin.addEventListener("click", () => showAuthTab("login"));
-tabSignup.addEventListener("click", () => showAuthTab("signup"));
-
-// Log in / sign up are sent to the server (app.bzg) as packets and answered with
-// AUTHOK (you're in) or AUTHERR (with the reason).
-function authenticate(type, name, password) {
-    clearAuthErrors();
-    if (state !== "online") return showAuthError("Not connected yet. Wait for the green dot.");
-    authBusy = true;
-    setStatus(state);
-    clearTimeout(authTimer);
-    authTimer = setTimeout(() => failAuth("The server didn't answer. Is app.bzg running?"), AUTH_WAIT_MS);
-    if (!sendPacket(type, myId, name, password)) failAuth("Not connected yet. Wait for the green dot.");
-}
-
-function failAuth(text) {
-    clearTimeout(authTimer);
-    authBusy = false;
-    setStatus(state);
-    showAuthError(text);
-}
-
 // Messages the server sends to this tab only (not part of the live chat).
 // Returns true when it handled the packet.
 function handleServerReply(m) {
     if (m.id !== myId) return false;
     if (m.type === "AUTHOK") {
         clearTimeout(authTimer);
-        authBusy = false;
-        // Account is good. Now make sure nobody is already online under this name.
-        startClaim(m.name);
+        resuming = false;
+        if (!claim && !joined) startClaim(m.name);
         return true;
     }
     if (m.type === "AUTHERR") {
-        failAuth(m.name);
+        leaveToLogin(m.name);
         return true;
     }
     if (m.type === "HIST") {
@@ -1429,26 +1276,15 @@ function handleServerReply(m) {
     return false;
 }
 
-loginForm.addEventListener("submit", (e) => {
-    e.preventDefault();
-    if (claim || authBusy) return;
-    const name = loginUser.value.trim();
-    if (!name || !loginPass.value) return showAuthError("Enter your username and password.");
-    authenticate("LOGIN", name, loginPass.value);
+// Log out: tell everyone we left, tell the server to forget this login, go back to the login page.
+$("logoutBtn").addEventListener("click", () => {
+    leaving = true;
+    if (joined) sendPacket("BYE", myId, myName, "");
+    sendPacket("LOGOUT", myId, myName, "");
+    joined = false;
+    clearSession();
+    location.href = "/";
 });
-
-signupForm.addEventListener("submit", (e) => {
-    e.preventDefault();
-    if (claim || authBusy) return;
-    const name = signupUser.value.trim();
-    if (name.length < 2 || name.length > 16) return showAuthError("Username needs 2 to 16 characters.");
-    if (name.indexOf("|") >= 0) return showAuthError("Usernames can't contain |");
-    if (!signupPass.value) return showAuthError("Please choose a password.");
-    if (signupPass.value !== signupConfirm.value) return showAuthError("Passwords don't match.");
-    authenticate("SIGNUP", name, signupPass.value);
-});
-
-$("logoutBtn").addEventListener("click", () => location.reload());   // pagehide tells everyone we left
 
 // ---------- saved chat ----------
 // Past messages come from the server (app.bzg) as HIST packets, ending with HISTEND.
@@ -1533,4 +1369,4 @@ buildChannelList();
 renderChannelHeader();
 updateBadges();
 renderChannel();
-connect();
+if (stored) connect();

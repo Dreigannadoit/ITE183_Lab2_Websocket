@@ -42,10 +42,11 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 │   └── sqlite/sqlite.dll
 ├── public/
 │   ├── login.html       # Login / sign up page (served at /)
-│   ├── login.js         # Login page logic
 │   ├── chat.html        # Main chat page (served at /chat)
-│   ├── chat.js          # Chat page logic
-│   ├── common.js        # Shared by both pages: connection address, login note, console
+│   ├── scripts/
+│   │   ├── common.js    # Shared by both pages: connection address, login note, console
+│   │   ├── login.js     # Login page logic
+│   │   └── chat.js      # Chat page logic
 │   ├── style.css        # Cartoon-style theme
 │   └── 404.html
 └── README.md
@@ -94,13 +95,15 @@ On login the server sends the newest `HISTORY_PER_CHANNEL` messages of each chan
 
 **What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is saved in the `pictures` table of `chatterbox.db` (one row per 1500-character packet, base64) and referenced from the `messages` table as the text `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Timestamps come from the sender's browser.
 
-**Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `DB_FILE`. If you add a channel in `public/chat.js`, add it to `CHANNELS` there too.
+**Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `DB_FILE`. If you add a channel in `public/scripts/chat.js`, add it to `CHANNELS` there too.
 
 ## How It Works
 
 **Two pages.** `/` is the login / sign up page (`login.html`) and `/chat` is the chat (`chat.html`). After a successful login the login page saves your tab id and name in the browser tab (`sessionStorage`) and opens `/chat`. The chat page opens its own WebSocket and sends `RESUME|id||`; the server answers `AUTHOK` with your username if that login is known, or `AUTHERR`, which sends you back to the login page. Logging out sends `LOGOUT|id||`, clears the note and returns to the login page. Refreshing the chat page keeps you logged in; closing the tab does not.
 
-The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/chat.js`; accounts and saved messages are handled inside `app.bzg`, using packets that are answered to one client instead of being broadcast.
+**Connection popup.** If the connection to the server drops, a small popup appears in the bottom right corner with a spinner and "Connection lost. Trying to reconnect...". It stays (without repeating) while the page keeps retrying, then changes to "Reconnected" and slides away. It is hidden the rest of the time.
+
+The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/scripts/chat.js`; accounts and saved messages are handled inside `app.bzg`, using packets that are answered to one client instead of being broadcast.
 
 The live chat part is a relay on purpose. An earlier version kept the username list on the server in a BSL array, and it misbehaved (messages were treated as new usernames, and the server stalled when two people joined together). The relay design only uses `sendAll`, which is the same thing the original lab server did.
 
@@ -130,7 +133,7 @@ If a message arrives without a known channel in front (for example from an older
 
 **Memory.** Browsers keep decoded pictures in memory, and that is the expensive part. Each picture is only decoded while it is on screen (or within about a screen of it). When it scrolls away, you switch channel, or the tab stays hidden for 5 seconds, the picture is released. Scrolling back shows the loading animation briefly and reloads it from the small compressed copy kept in the page. Past 40 MB of kept pictures, the oldest are dropped and show "Removed to save memory".
 
-**Settings** are the constants at the top of the script in `public/chat.js`: `MAX_DIM`, `MAX_IMG_BYTES`, `CHUNK_CHARS`, `MAX_STORE_BYTES`, `MIN_LOADING_MS`, `HIDDEN_UNLOAD_MS`.
+**Settings** are the constants at the top of the script in `public/scripts/chat.js`: `MAX_DIM`, `MAX_IMG_BYTES`, `CHUNK_CHARS`, `MAX_STORE_BYTES`, `MIN_LOADING_MS`, `HIDDEN_UNLOAD_MS`.
 
 **Limits.**
 - Pictures are saved on the server, so they survive a refresh and people who join later see them. Only pictures sent while the server was running this version are saved.
@@ -141,7 +144,7 @@ If a message arrives without a known channel in front (for example from an older
 
 | Handler | Behavior |
 | ------- | -------- |
-| `server.get` | `/` serves `public/login.html` (also `/login`), `/chat` serves `public/chat.html`, and `/style.css`, `/common.js`, `/login.js`, `/chat.js` their files, anything else serves `public/404.html` |
+| `server.get` | `/` serves `public/login.html` (also `/login`), `/chat` serves `public/chat.html`, and `/style.css` and `/scripts/common.js`, `/scripts/login.js`, `/scripts/chat.js` their files, anything else serves `public/404.html` |
 | `server.onConnect` | Logs the connection |
 | `server.onData` | `SIGNUP`, `LOGIN`, `HISTORY` and `SAVE` are handled by the server and answered to the sender only. Everything else is broadcast to everyone with `sendAll` |
 | `server.onDisconnect` | Logs the disconnection |
@@ -204,10 +207,10 @@ Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one por
 
 ## Customization
 
-- **Add or rename channels:** edit the `CHANNELS` list near the top of the script in `public/chat.js`. Every browser needs the same list. The server doesn't need to change.
+- **Add or rename channels:** edit the `CHANNELS` list near the top of the script in `public/scripts/chat.js`. Every browser needs the same list. The server doesn't need to change.
 
 - **Change the port:** edit `http(8000)` in `app.bzg`. The client uses the page's own host and port, so it follows automatically.
-- **Presence timing:** adjust `HEARTBEAT_MS` and `STALE_MS` at the top of the script in `public/chat.js`.
+- **Presence timing:** adjust `HEARTBEAT_MS` and `STALE_MS` at the top of the script in `public/scripts/chat.js`.
 - **Recolor the app:** edit the variables in `:root` in `public/style.css`.
 
 ## Troubleshooting
