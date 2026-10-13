@@ -1,4 +1,4 @@
-// Chatterbox shared code. Loaded first by BOTH login.html and chat.html.
+// BISCORD shared code. Loaded first by BOTH login.html and chat.html.
 // Holds the connection address, the "who is logged in" helpers and the console.
 
 const $ = (id) => document.getElementById(id);

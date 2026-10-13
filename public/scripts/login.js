@@ -1,4 +1,4 @@
-// Chatterbox login page. Loaded by login.html, after common.js.
+// BISCORD login page. Loaded by login.html, after common.js.
 // Logs in or signs up through the server (app.bzg), then hands you over to the chat page.
 // The chat itself lives in chat.html + chat.js.
 

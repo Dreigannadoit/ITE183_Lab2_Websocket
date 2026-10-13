@@ -1,4 +1,4 @@
-// Chatterbox chat page. Loaded by chat.html, after common.js.
+// BISCORD chat page. Loaded by chat.html, after common.js.
 // Logging in / signing up happens on the login page (login.html + login.js).
 // This page only asks the server "is this tab still logged in?" (RESUME) and, if not,
 // sends you back to the login page.
@@ -269,7 +269,7 @@ function connect() {
         if (PACKET_TYPES.indexOf(m.type) < 0) {
             if (!warnedUnknown) {
                 warnedUnknown = true;
-                logLine("System", "Ignored a message that isn't a Chatterbox packet. If the chat stays empty, make sure the server is running the new app.bzg.");
+                logLine("System", "Ignored a message that isn't a BISCORD packet. If the chat stays empty, make sure the server is running the new app.bzg.");
             }
             return;
         }
