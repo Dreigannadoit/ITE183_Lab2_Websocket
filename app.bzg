@@ -23,6 +23,7 @@ var server = http(8000);
 //     RESUME|id||                           (chat page: "is this tab still logged in?")
 //     LOGOUT|id||                           (forget this login)
 //     HISTORY|id||
+//     USERS|id||                            ("who has an account?" for the member panel)
 //     SAVE|id|channel|timestamp|text        (payload is  timestamp|text)
 //
 //   server -> that one client
@@ -30,6 +31,8 @@ var server = http(8000);
 //     AUTHERR|id|message|
 //     HIST|id|user|channel|timestamp|text   (one per saved message)
 //     HISTEND|id||
+//     USER|id|username|                     (one per registered account)
+//     USEREND|id||
 //     SAVEERR|id|message|
 //
 // Anything else is a live chat packet and is broadcast to everyone, as before.
@@ -425,6 +428,26 @@ function doHistory(clientId, id) {
 }
 
 // ------------------------------------------
+// MEMBER LIST (every registered account, for the panel on the right)
+// ------------------------------------------
+// The browser already knows who is online (from the live chat). This adds everybody
+// else, so the panel can show online people in green and the rest in grey.
+function doUsers(clientId, id) {
+    if (findSession(id) < 0) {
+        reply(clientId, "USEREND", id, "", "");
+        return;
+    }
+    var rows = dbQuery("SELECT username FROM users ORDER BY username COLLATE NOCASE;");
+    var n = rowCount(rows);
+    var i = 0;
+    while (i < n) {
+        reply(clientId, "USER", id, rows[i].username, "");
+        i = i + 1;
+    }
+    reply(clientId, "USEREND", id, "", "");
+}
+
+// ------------------------------------------
 // PICTURES (saved so they come back after a restart / re-login)
 // ------------------------------------------
 // While a picture is being sent (IMGH header + IMGC pieces, still relayed live to
@@ -737,6 +760,10 @@ server.onData = function (message, clientId) {
     else if (type == "HISTORY") {
         var c = parsePacket(message);
         doHistory(clientId, c[1]);
+    }
+    else if (type == "USERS") {
+        var us = parsePacket(message);         // type, id
+        doUsers(clientId, us[1]);
     }
     else if (type == "IMGGET") {
         var g = parsePacket(message);          // type, id, (name), picId

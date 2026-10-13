@@ -8,8 +8,8 @@ A real-time group chat app with a Discord-style layout: channels on the left, th
 - **Saved chat**: every text message is stored in a SQLite database, so when you log in again the earlier conversation in each channel is already there (the last 100 per channel are sent on login)
 - **Log out** button in your user card
 - The same account can't be online twice at once (a second login is refused until the first tab closes)
-- Join and leave announcements
-- Live "Online" list, updated whenever someone joins or leaves
+- **Join popups**: when someone joins, a small popup ("Name joined the chat") slides in at the bottom right for a few seconds instead of adding a line to the chat. Leave notices still appear in `#general`
+- **Members panel** (right side): lists **every registered user**. People who are online right now are highlighted in **green** and listed first; everyone else is shown in **greyscale**. The header shows "N online · M registered". Click anyone to insert an `@mention`
 - **Channels** (`#general`, `#random`, `#help`, `#memes`): each has its own messages, header and topic. Switch with a click or **Alt + Up/Down**
 - **Unread markers**: a channel you aren't viewing shows a dot when it has new messages, and a pink number badge when someone **@mentioned** you
 - **@mentions**: type `@Name` (or click a person in the Online list to insert it). Mentioned names are highlighted, and messages that mention you get a yellow highlight
@@ -77,6 +77,7 @@ Accounts and history use the **same WebSocket as the chat**, so only port **8000
 | `SIGNUP\|id\|username\|password` | `AUTHOK` or `AUTHERR` | Checks the name (2–16 characters, not taken, case-insensitive) and a password was given, then creates the account and logs the tab in |
 | `LOGIN\|id\|username\|password` | `AUTHOK` or `AUTHERR` | Checks username and password |
 | `HISTORY\|id\|\|` | `HIST` per message, then `HISTEND` | Returns the saved messages (last `HISTORY_PER_CHANNEL` per channel) |
+| `USERS\|id\|\|` | `USER` per account, then `USEREND` | Returns every registered username, for the members panel. The page asks after joining, after reconnecting, and when it meets a name it doesn't know yet (someone who just signed up) |
 | `SAVE\|id\|channel\|timestamp\|text` | `SAVEERR` only if not logged in | Saves one message. The browser sends it every time you send a message |
 
 The server remembers which tab (`id`) logged in, so `SAVE` and `HISTORY` only work after a login.
@@ -100,6 +101,10 @@ On login the server sends the newest `HISTORY_PER_CHANNEL` messages of each chan
 ## How It Works
 
 **Two pages.** `/` is the login / sign up page (`login.html`) and `/chat` is the chat (`chat.html`). After a successful login the login page saves your tab id and name in the browser tab (`sessionStorage`) and opens `/chat`. The chat page opens its own WebSocket and sends `RESUME|id||`; the server answers `AUTHOK` with your username if that login is known, or `AUTHERR`, which sends you back to the login page. Logging out sends `LOGOUT|id||`, clears the note and returns to the login page. Refreshing the chat page keeps you logged in; closing the tab does not.
+
+**Join popups.** When a `HELLO` arrives from someone else, `showJoinToast()` in `public/scripts/chat.js` adds a popup to `#joinToasts` (bottom right, stacked above the connection popup if both are showing). Each stays `JOIN_TOAST_MS` (4 seconds) and at most `MAX_JOIN_TOASTS` (4) show at once. You don't get a popup for your own join.
+
+**Members panel.** The browser knows who is online from the live chat (`peers`) and who has an account from the server (`registered`, filled by `USERS`). `renderUsers()` merges them: online = `.member.active` (green), registered but not online = `.member.inactive` (greyscale, see `style.css`).
 
 **Connection popup.** If the connection to the server drops, a small popup appears in the bottom right corner with a spinner and "Connection lost. Trying to reconnect...". It stays (without repeating) while the page keeps retrying, then changes to "Reconnected" and slides away. It is hidden the rest of the time.
 

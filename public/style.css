@@ -559,7 +559,8 @@ body {
     border-left: var(--line) solid var(--ink);
     z-index: 3;
 }
-.panel h2 { margin: 0 0 16px 4px; font-family: var(--display); font-weight: 400; font-size: 22px; }
+.panel h2 { margin: 0 0 4px 4px; font-family: var(--display); font-weight: 400; font-size: 22px; }
+.panel-sub { margin: 0 0 16px 4px; font-size: 13px; font-weight: 800; }
 .panel ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
 .member {
     width: 100%;
@@ -581,6 +582,9 @@ body {
 .member:hover { transform: translateY(-2px); box-shadow: 0 6px 0 var(--ink); }
 .member:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--ink); }
 .member .avatar { width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
+/* online: highlighted in green. offline (registered, not here right now): greyscale */
+.member.active { background: var(--green); }
+.member.inactive { background: #E6E3EC; filter: grayscale(1); opacity: .75; }
 .you { margin-left: auto; font-size: 12px; padding: 1px 8px; background: var(--yellow); border: 2px solid var(--ink); border-radius: 999px; }
 
 .scrim { display: none; }
@@ -757,6 +761,37 @@ body {
     border-width: 0 3px 3px 0;
     transform: rotate(45deg);
 }
+
+/* ---------- join popups (bottom right) ---------- */
+.join-toasts {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;                      /* chat.js lifts it above the message box (and the connection popup) */
+    z-index: 11;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    max-width: calc(100vw - 28px);
+    pointer-events: none;
+}
+.join-toast {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    padding: 7px 18px 8px 7px;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 999px;
+    box-shadow: 0 5px 0 var(--ink);
+    transform-origin: 100% 100%;
+    animation: toast-in .45s cubic-bezier(.3, 1.4, .5, 1) both;
+}
+.join-toast.leaving { animation: toast-out .3s ease-in both; }
+.join-toast .avatar { flex: none; width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }

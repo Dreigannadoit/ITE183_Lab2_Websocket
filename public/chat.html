@@ -113,8 +113,9 @@
             </form>
         </section>
 
-        <aside id="panel" class="panel" aria-label="People online">
-            <h2>Online (<span id="count">0</span>)</h2>
+        <aside id="panel" class="panel" aria-label="Members">
+            <h2>Members</h2>
+            <p class="panel-sub"><span id="count">0</span> online &middot; <span id="total">0</span> registered</p>
             <ul id="users"></ul>
         </aside>
 
@@ -126,6 +127,9 @@
         <span class="conn-icon" aria-hidden="true"></span>
         <span id="connText" class="conn-text"></span>
     </div>
+
+    <!-- ===================== JOIN POPUPS ("<name> joined the chat", bottom right) ===================== -->
+    <div id="joinToasts" class="join-toasts" role="status" aria-live="polite"></div>
 
     <div id="lightbox" class="lightbox" hidden>
         <button id="lbClose" class="btn small" type="button">Close</button>

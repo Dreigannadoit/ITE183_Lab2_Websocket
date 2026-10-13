@@ -39,6 +39,7 @@ const CHANNELS = [
 const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
 const msgInput = $("msgInput"), sendBtn = $("sendBtn");
 const logEl = $("log"), usersEl = $("users"), countEl = $("count");
+const totalEl = $("total");
 const panel = $("panel"), whoBtn = $("whoBtn"), chanBtn = $("chanBtn");
 const channelsEl = $("channels"), channelList = $("channelList"), scrim = $("scrim");
 const chanNameEl = $("chanName"), chanTopicEl = $("chanTopic");
@@ -71,7 +72,13 @@ let leaving = false;         // true once we are on our way back to the login pa
 let historyBuf = null;       // saved messages arriving from the server: channel id -> [msg]
 let historyDone = null;      // called when the last saved message has arrived
 let historyTimer = null;
-const peers = new Map();     // id -> { name, seen }
+const peers = new Map();     // id -> { name, seen }   (people online right now)
+const registered = new Map(); // lower-case name -> name   (every account, from the server)
+const askedAbout = new Set(); // names we already refreshed the account list for
+let usersBuf = null;         // account names arriving from the server (null = no request running)
+let usersTimer = null;
+let usersAgain = false;      // a new name showed up while a request was running
+let usersLoaded = false;
 const typers = new Map();    // id -> { name, ch, timer }  (people typing right now)
 let iAmTyping = false;
 let typingChannel = "general";
@@ -146,9 +153,40 @@ const TOAST_BACK_MS = 1800;   // how long "Reconnected" stays before it leaves
 const TOAST_EXIT_MS = 320;    // a little longer than the exit animation
 let toastTimer = null, toastExitTimer = null;
 
+// "<name> joined the chat" popups. They stack in the same corner, just above the connection popup.
+const joinToasts = $("joinToasts");
+const JOIN_TOAST_MS = 4000;    // how long a join popup stays
+const MAX_JOIN_TOASTS = 4;     // more than this at once: the oldest goes
+
 // Sit just above the message box so it never covers the Send button.
 function placeToast() {
     connToast.style.bottom = (($("chatForm").offsetHeight || 0) + 14) + "px";
+    placeJoinToasts();
+}
+
+function placeJoinToasts() {
+    const lift = connToast.hidden ? 0 : connToast.offsetHeight + 12;
+    joinToasts.style.bottom = (($("chatForm").offsetHeight || 0) + 14 + lift) + "px";
+}
+
+function showJoinToast(name) {
+    placeJoinToasts();
+    while (joinToasts.children.length >= MAX_JOIN_TOASTS) joinToasts.firstElementChild.remove();
+    const t = document.createElement("div");
+    t.className = "join-toast";
+    const text = document.createElement("span");
+    const who = document.createElement("b");
+    who.textContent = name;
+    text.append(who, " joined the chat");
+    t.append(makeAvatar(name), text);
+    joinToasts.append(t);
+    setTimeout(() => dismissJoinToast(t), JOIN_TOAST_MS);
+}
+
+function dismissJoinToast(t) {
+    if (!t.isConnected || t.classList.contains("leaving")) return;
+    t.classList.add("leaving");
+    setTimeout(() => t.remove(), TOAST_EXIT_MS);
 }
 window.addEventListener("resize", placeToast);
 if (window.ResizeObserver) new ResizeObserver(placeToast).observe($("chatForm"));
@@ -165,6 +203,7 @@ function showConnToast(kind, text) {
         connToast.hidden = false;
         void connToast.offsetWidth;
         connToast.classList.add("entering");
+        placeJoinToasts();
     }
 }
 
@@ -177,6 +216,7 @@ function hideConnToast() {
     toastExitTimer = setTimeout(() => {
         connToast.hidden = true;
         connToast.classList.remove("leaving");
+        placeJoinToasts();
     }, TOAST_EXIT_MS);
 }
 
@@ -193,6 +233,7 @@ function connect() {
         if (joined) {
             // Connection came back: tell everyone we're still here.
             resetPeers();
+            requestUsers();
             sendPacket("HELLO", myId, myName, "re");
             if (!connToast.hidden) {
                 showConnToast("back", "Reconnected");
@@ -275,7 +316,7 @@ function handle(data) {
 
     if (m.type === "HELLO") {
         addPeer(m.id, m.name);
-        if (m.payload !== "re") addSystem(m.name + " joined the chat", "general");
+        if (m.payload !== "re" && m.id !== myId) showJoinToast(m.name);
         if (m.id !== myId) sendPacket("HERE", myId, myName, "");
     } else if (m.type === "HERE") {
         addPeer(m.id, m.name);
@@ -313,6 +354,12 @@ function addPeer(id, name) {
     const known = peers.get(id);
     peers.set(id, { name, seen: Date.now() });
     if (!known || known.name !== name) renderUsers();
+    // Someone we have no account for yet (they just signed up): refresh the account list, once per name.
+    const key = name.toLowerCase();
+    if (usersLoaded && !registered.has(key) && !askedAbout.has(key)) {
+        askedAbout.add(key);
+        requestUsers();
+    }
 }
 
 // ---------- typing indicator (per channel) ----------
@@ -438,6 +485,7 @@ async function finishClaim() {
     showScreen("chat");
     setStatus(state);
     renderChannel();
+    requestUsers();
     sendPacket("HELLO", myId, myName, "");
     msgInput.focus();
 }
@@ -1159,27 +1207,60 @@ function insertMention(name) {
     msgInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+// Ask the server for every registered account (answered with USER ..., USEREND).
+function requestUsers() {
+    if (usersBuf) { usersAgain = true; return; }     // one request at a time
+    usersBuf = [];
+    clearTimeout(usersTimer);
+    usersTimer = setTimeout(finishUsers, HISTORY_WAIT_MS);
+    if (!sendPacket("USERS", myId, myName, "")) { usersBuf = null; clearTimeout(usersTimer); }
+}
+
+function finishUsers() {
+    clearTimeout(usersTimer);
+    if (usersBuf) {
+        registered.clear();
+        usersBuf.forEach((n) => registered.set(n.toLowerCase(), n));
+        usersLoaded = true;
+    }
+    usersBuf = null;
+    renderUsers();
+    if (usersAgain) { usersAgain = false; requestUsers(); }
+}
+
+// Everyone with an account. People who are online right now (green) come first, then the rest (grey).
 function renderUsers() {
-    const list = Array.from(peers.entries()).sort((a, b) => a[1].name.localeCompare(b[1].name));
-    countEl.textContent = list.length;
+    const rows = new Map();   // lower-case name -> { name, id }   (id = the tab that is online, or null)
+    registered.forEach((name, key) => rows.set(key, { name, id: null }));
+    peers.forEach((p, id) => {
+        const key = p.name.toLowerCase();
+        const row = rows.get(key);
+        if (row) { row.id = id; row.name = p.name; } else rows.set(key, { name: p.name, id });
+    });
+    const list = Array.from(rows.values()).sort((a, b) =>
+        (a.id === null) - (b.id === null) || a.name.localeCompare(b.name));
+    countEl.textContent = list.filter((r) => r.id !== null).length;
+    totalEl.textContent = list.length;
     usersEl.replaceChildren();
-    list.forEach(([id, p]) => {
+    list.forEach((r) => {
+        const active = r.id !== null;
         const li = document.createElement("li");
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "member";
+        btn.className = "member " + (active ? "active" : "inactive");
+        btn.setAttribute("aria-label", r.name + (active ? ", online" : ", offline"));
         const label = document.createElement("span");
-        label.textContent = p.name;
-        btn.append(makeAvatar(p.name), label);
-        if (id === myId) {
+        label.textContent = r.name;
+        btn.append(makeAvatar(r.name), label);
+        if (same(r.name, myName)) {
             const tag = document.createElement("span");
             tag.className = "you";
             tag.textContent = "you";
             btn.append(tag);
             btn.title = "That's you";
         } else {
-            btn.title = "Click to mention " + p.name;
-            btn.addEventListener("click", () => { insertMention(p.name); closeDrawers(); });
+            btn.title = "Click to mention " + r.name + (active ? "" : " (offline)");
+            btn.addEventListener("click", () => { insertMention(r.name); closeDrawers(); });
         }
         li.append(btn);
         usersEl.appendChild(li);
@@ -1245,6 +1326,15 @@ function handleServerReply(m) {
     }
     if (m.type === "HISTEND") {
         finishHistory();
+        return true;
+    }
+    if (m.type === "USER") {
+        // name = a registered username
+        if (usersBuf && m.name) usersBuf.push(m.name);
+        return true;
+    }
+    if (m.type === "USEREND") {
+        finishUsers();
         return true;
     }
     if (m.type === "PICH") {
