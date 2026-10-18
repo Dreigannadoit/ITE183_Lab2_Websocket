@@ -676,7 +676,12 @@ function mentionsMe(text) {
 
 // Writes text into an element, turning @names of people who are online into tags.
 function appendText(el, text) {
-    const names = Array.from(peers.values()).map((p) => p.name).sort((a, b) => b.length - a.length);
+    // Online people plus everyone with an account, so an @name keeps its tag after a save
+    // even when that person happens to be offline or the roster hasn't refreshed.
+    const known = new Map();
+    registered.forEach((n, key) => known.set(key, n));
+    peers.forEach((p) => known.set(p.name.toLowerCase(), p.name));
+    const names = Array.from(known.values()).sort((a, b) => b.length - a.length);
     let buf = "";
     let i = 0;
     while (i < text.length) {
@@ -765,6 +770,7 @@ function makeMessage(item, grouped) {
     }
 
     row.append(gutter, content);
+    syncEditedNote(row, item);
     return row;
 }
 
@@ -772,11 +778,22 @@ function makeMessage(item, grouped) {
 function fillBubble(bubble, item) {
     bubble.replaceChildren();
     appendText(bubble, item.text);
-    if (item.edited) {
-        const tag = document.createElement("span");
-        tag.className = "edited";
-        tag.textContent = "(edited)";
-        bubble.append(" ", tag);
+}
+
+// The small "(edited)" note sits under the bubble, not inside it.
+function syncEditedNote(row, item) {
+    const content = row && row.querySelector(".content");
+    if (!content) return;
+    let note = content.querySelector(".edited-note");
+    if (item.edited && item.kind === "msg") {
+        if (!note) {
+            note = document.createElement("small");
+            note.className = "edited-note";
+            note.textContent = "(edited)";
+            content.append(note);
+        }
+    } else if (note) {
+        note.remove();
     }
 }
 
@@ -961,9 +978,17 @@ function applyEdited(ch, mid, name, text) {
     if (item.kind !== "msg") return;
     item.text = text;
     item.edited = true;
+    // An edit can add or remove an @mention of me, so the highlight has to follow the new text.
+    if (item.id !== myId) {
+        const now = mentionsMe(text);
+        if (now && !item.mention && ch !== current) { store[ch].mentions++; updateBadges(); }
+        item.mention = now;
+    }
     const row = ch === current ? findRow(mid) : null;
+    if (row) row.classList.toggle("mention", !!item.mention);
     const bubble = row && row.querySelector(".bubble");
     if (bubble) fillBubble(bubble, item);
+    syncEditedNote(row, item);
 }
 
 function applyDeleted(ch, mid, name) {

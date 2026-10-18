@@ -849,7 +849,7 @@ body {
 .act-btn.text { display: block; line-height: 24px; }
 .act-ask { padding: 0 6px; font-size: 13px; font-weight: 800; white-space: nowrap; }
 
-.bubble .edited { font-size: 11px; font-weight: 700; opacity: .75; white-space: nowrap; }
+.edited-note { padding: 0 6px; font-size: 11px; font-weight: 700; color: #5b5273; }
 
 .edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: min(520px, 100%); }
 .edit-input { flex: 1 1 220px; min-width: 0; padding: 8px 12px; }
