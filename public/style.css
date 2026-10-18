@@ -1585,7 +1585,7 @@ html.pt-came .join-card { animation: pop .55s cubic-bezier(.3, 1.6, .5, 1) .5s b
 .prof-banner-hint {
     position: absolute;
     left: 9px;
-    bottom: 9px;
+    top: 9px;
     display: inline-flex;
     align-items: center;
     gap: 6px;
