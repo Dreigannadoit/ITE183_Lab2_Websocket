@@ -32,7 +32,8 @@ const CHANNELS = [
     { id: "general", topic: "Say hi and hang out" },
     { id: "random", topic: "Anything goes" },
     { id: "help", topic: "Stuck on something? Ask here" },
-    { id: "memes", topic: "Only the good stuff" }
+    { id: "memes", topic: "Only the good stuff" }, 
+    { id: "intro", topic: "Let's get to know each other better. Introduce yourself." },
 ];
 
 // joinScreen is the small "getting your chat ready" card; chatScreen is the chat itself.

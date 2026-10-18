@@ -73,7 +73,7 @@ var server = http(8000);
 // ------------------------------------------
 // SETTINGS
 // ------------------------------------------
-var CHANNELS = ["general", "random", "help", "memes"];   // keep in sync with public/app.js
+var CHANNELS = ["general", "random", "help", "memes", "intro"];   // keep in sync with public/app.js
 var MAX_TEXT = 1000;               // same limit as the message box
 var HISTORY_PER_CHANNEL = 100;    // how many past messages a person gets on login
 
