@@ -388,11 +388,7 @@ body {
 .msg.mine .bubble { border-radius: 18px 18px 6px 18px; }
 .msg.mine .gutter time { right: auto; left: 0; }
 .msg.mine.mention { box-shadow: inset -5px 0 0 var(--orange); }
-/* Your own messages hug the right edge and never stretch across the whole chat: past this width the text wraps. */
-.msg.mine .content > .bwrap, .msg.mine .content > .bubble { max-width: 72%; }
-@media (max-width: 600px) {
-    .msg.mine .content > .bwrap, .msg.mine .content > .bubble { max-width: 88%; }
-}
+
 
 .mention-tag { padding: 0 6px 1px; font-weight: 800; color: var(--ink); background: var(--sky); border: 2px solid var(--ink); border-radius: 8px; }
 .mention-tag.me { background: var(--yellow); }
@@ -809,7 +805,9 @@ body {
    EDIT / DELETE YOUR OWN MESSAGES
    Only your own messages get these buttons (see makeActions in chat.js).
 ------------------------------------------------------------ */
-.bwrap { position: relative; max-width: 100%; min-width: 0; }
+/* The wrapper has the same width cap as the bubble. Without it a long message made the wrapper as wide as the whole chat
+   while the bubble inside stopped at 640px on its left side, leaving a gap between the bubble and the right edge. */
+.bwrap { position: relative; max-width: min(100%, 640px); min-width: 0; }
 .msg-actions {
     position: absolute;
     top: 50%;
