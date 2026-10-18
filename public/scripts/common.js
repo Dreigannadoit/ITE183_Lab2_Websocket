@@ -19,6 +19,19 @@ function newId() {
     return Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);
 }
 
+// A private secret for this login. It is sent to the server together with the password and is
+// never shown to other people, so the server can tell that edit / delete requests really come
+// from this login (a tab id alone is visible to everyone in the chat).
+function newSecret() {
+    const bytes = new Uint8Array(16);
+    if (window.crypto && crypto.getRandomValues) {
+        crypto.getRandomValues(bytes);
+    } else {
+        for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    return Array.from(bytes, (b) => (b < 16 ? "0" : "") + b.toString(16)).join("");
+}
+
 function loadSession() {
     try {
         const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
@@ -27,8 +40,8 @@ function loadSession() {
     return null;
 }
 
-function saveSession(id, name) {
-    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ id, name })); } catch (err) { }
+function saveSession(id, name, secret) {
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ id, name, secret })); } catch (err) { }
 }
 
 function clearSession() {
@@ -64,7 +77,7 @@ function parse(data) {
 // ---------- console (shows what travels over the socket) ----------
 const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 // Packets too chatty (or too private, like passwords) to list in the console.
-const QUIET_TYPES = ["TYPING", "IMGC", "IMGGET", "PICH", "PICC", "SIGNUP", "LOGIN", "RESUME", "LOGOUT", "SAVE", "HISTORY", "HIST", "HISTEND", "USERS", "USER", "USEREND", "AUTHOK", "AUTHERR", "SAVEERR"];
+const QUIET_TYPES = ["TYPING", "IMGC", "IMGGET", "PICH", "PICC", "SIGNUP", "LOGIN", "RESUME", "LOGOUT", "SAVE", "HISTORY", "HIST", "HISTEND", "USERS", "USER", "USEREND", "AUTHOK", "AUTHERR", "SAVEERR", "EDIT", "EDITERR", "DELETE", "DELETEERR"];
 const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
 function logLine(tag, text) {

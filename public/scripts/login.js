@@ -13,6 +13,7 @@ const authFields = [loginUser, loginPass, loginBtn, signupUser, signupPass, sign
 
 // Every visit to this page gets a fresh id. If the login works, the chat page keeps using it.
 const myId = newId();
+const mySecret = newSecret();   // sent with the password; the server keeps it for edit / delete
 
 let socket = null;
 let retryTimer = null;
@@ -71,7 +72,7 @@ function connect() {
             clearTimeout(authTimer);
             leaving = true;
             logLine("System", "Logged in as " + m.name + ". Opening the chat...");
-            saveSession(myId, m.name);
+            saveSession(myId, m.name, mySecret);
             location.href = "/chat";
         } else if (m.type === "AUTHERR") {
             failAuth(m.name);
@@ -126,7 +127,7 @@ function authenticate(type, name, password) {
     setStatus(state);
     clearTimeout(authTimer);
     authTimer = setTimeout(() => failAuth("The server didn't answer. Is app.bzg running?"), AUTH_WAIT_MS);
-    if (!sendPacket(type, myId, name, password)) failAuth("Not connected yet. Wait for the green dot.");
+    if (!sendPacket(type, myId, name, mySecret + "|" + password)) failAuth("Not connected yet. Wait for the green dot.");
 }
 
 function failAuth(text) {

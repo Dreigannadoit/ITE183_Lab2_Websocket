@@ -58,6 +58,7 @@ let warnedUnknown = false;
 const stored = loadSession();
 if (!stored) location.replace("/");
 const myId = stored ? stored.id : "";
+const mySecret = stored && stored.secret ? stored.secret : "";   // proves to the server that edit / delete come from this login
 
 let socket = null;
 let retryTimer = null;
@@ -118,7 +119,7 @@ function sendRaw(text) {
         const m = parse(text);
         if (QUIET_TYPES.indexOf(m.type) < 0) {
             if (m.type === "MSG") {
-                const msg = splitPayload(m.payload);
+                const msg = splitMsg(m.payload);
                 logLine("Client", "#" + msg.ch + " " + msg.text);
             } else if (m.type === "IMGH") {
                 const hd = splitPayload(m.payload);
@@ -143,6 +144,33 @@ function splitPayload(payload) {
     }
     return { ch: "general", text: payload };
 }
+
+// MSG payload:  channel|messageId|text   ->  { ch, mid, text }
+const MID_RE = /^[a-z0-9]{1,24}$/;
+function splitMsg(payload) {
+    const a = splitPayload(payload);
+    const k = a.text.indexOf("|");
+    if (k > 0 && MID_RE.test(a.text.slice(0, k))) {
+        return { ch: a.ch, mid: a.text.slice(0, k), text: a.text.slice(k + 1) };
+    }
+    return { ch: a.ch, mid: "", text: a.text };
+}
+
+// "a|b|c|rest of it"  ->  ["a", "b", "c", "rest of it"]   (n fields, then whatever is left)
+function takeFields(s, n) {
+    const out = [];
+    let rest = s;
+    for (let i = 0; i < n; i++) {
+        const k = rest.indexOf("|");
+        if (k < 0) { out.push(rest); rest = ""; } else { out.push(rest.slice(0, k)); rest = rest.slice(k + 1); }
+    }
+    out.push(rest);
+    return out;
+}
+
+// Every message gets an id when it is sent. Everybody uses it to find that message again
+// when the author edits or deletes it.
+const newMsgId = () => "m" + newSecret().slice(0, 14);
 
 // ---------- connection popup ----------
 // One small popup in the bottom right corner instead of a line in the chat for every retry.
@@ -256,7 +284,7 @@ function connect() {
         if (handleServerReply(m)) return;
         if (QUIET_TYPES.indexOf(m.type) < 0) {
             if (m.type === "MSG") {
-                const msg = splitPayload(m.payload);
+                const msg = splitMsg(m.payload);
                 logLine("Server", m.name + " says in #" + msg.ch + ": " + msg.text);
             } else if (m.type === "IMGH") {
                 const hd = splitPayload(m.payload);
@@ -264,6 +292,13 @@ function connect() {
             } else {
                 logLine("Server", data);
             }
+        }
+
+        // The server announces an edit or delete to everybody. A copy that came wrapped as
+        // "User <n> says: ..." was relayed from a client, so it is a fake and is ignored.
+        if (m.type === "EDITED" || m.type === "DELETED") {
+            if (!wrapped) applyRemote(m);
+            return;
         }
 
         if (PACKET_TYPES.indexOf(m.type) < 0) {
@@ -332,10 +367,10 @@ function handle(data) {
             addSystem(m.name + " left the chat", "general");
         }
     } else if (m.type === "MSG") {
-        const msg = splitPayload(m.payload);
+        const msg = splitMsg(m.payload);
         clearTyper(m.id);
         addPeer(m.id, m.name);
-        receiveMessage(msg.ch, m.id, m.name, msg.text);
+        receiveMessage(msg.ch, m.id, m.name, msg.text, msg.mid);
     } else if (m.type === "IMGH") {
         onImageHeader(m);
     } else if (m.type === "IMGC") {
@@ -707,17 +742,42 @@ function makeMessage(item, grouped) {
         content.append(meta);
     }
 
+    let bubble;
     if (item.kind === "img") {
-        content.append(makeImageBubble(item));
+        bubble = makeImageBubble(item);
     } else {
-        const bubble = document.createElement("div");
+        bubble = document.createElement("div");
         bubble.className = "bubble";
-        appendText(bubble, item.text);
+        fillBubble(bubble, item);
+    }
+
+    if (item.mid) row.dataset.mid = item.mid;
+    if (item.mid && same(item.name, myName)) {
+        // Your own message: it gets Edit / Delete buttons. (Other people's messages never do.)
+        // The buttons are only a convenience; the server checks again who wrote the message.
+        if (item.kind === "img" && item.status === "sending") row.classList.add("busy");
+        const wrap = document.createElement("div");
+        wrap.className = "bwrap";
+        wrap.append(bubble, makeActions(item));
+        content.append(wrap);
+    } else {
         content.append(bubble);
     }
 
     row.append(gutter, content);
     return row;
+}
+
+// The text of a message bubble (with a small "(edited)" note after an edit).
+function fillBubble(bubble, item) {
+    bubble.replaceChildren();
+    appendText(bubble, item.text);
+    if (item.edited) {
+        const tag = document.createElement("span");
+        tag.className = "edited";
+        tag.textContent = "(edited)";
+        bubble.append(" ", tag);
+    }
 }
 
 // One item can become several nodes: an optional date divider, then the item.
@@ -753,10 +813,10 @@ function addSystem(text, ch) {
     addItem(ch || "general", { kind: "sys", text, ts: Date.now() });
 }
 
-function receiveMessage(ch, id, name, text) {
+function receiveMessage(ch, id, name, text, mid) {
     const mine = id === myId;
     const mention = !mine && mentionsMe(text);
-    addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention });
+    addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention, mid: mid || "", edited: false });
     if (!mine) noteUnread(ch, mention);
 }
 
@@ -765,6 +825,157 @@ function noteUnread(ch, mention) {
     store[ch].unread++;
     if (mention) store[ch].mentions++;
     updateBadges();
+}
+
+// ---------- edit and delete your own messages ----------
+// Only the author gets the buttons, and the server only accepts EDIT / DELETE from the author
+// (it checks the secret from login and who wrote the message), so this is more than cosmetics.
+//   EDIT|id|name|secret|messageId|newText      DELETE|id|name|secret|messageId
+// The server answers everybody with  EDITED||user|channel|messageId|text  or  DELETED||user|channel|messageId
+// and answers a refusal to the sender only (EDITERR / DELETEERR with the reason).
+const PENCIL_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const TRASH_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>';
+
+function actionButton(label, html, extraClass, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "act-btn" + (extraClass ? " " + extraClass : "");
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.innerHTML = html;
+    b.addEventListener("click", onClick);
+    return b;
+}
+
+function makeActions(item) {
+    const bar = document.createElement("div");
+    bar.className = "msg-actions";
+
+    function show(confirming) {
+        bar.classList.toggle("confirming", confirming);
+        bar.replaceChildren();
+        if (confirming) {
+            const q = document.createElement("span");
+            q.className = "act-ask";
+            q.textContent = item.kind === "img" ? "Delete picture?" : "Delete message?";
+            const yes = actionButton("Yes, delete", "Delete", "text danger", () => sendDelete(item));
+            const no = actionButton("Keep it", "Keep", "text", () => show(false));
+            bar.append(q, yes, no);
+            no.focus();
+        } else {
+            if (item.kind === "msg") bar.append(actionButton("Edit message", PENCIL_SVG, "", () => startEdit(item, bar)));
+            bar.append(actionButton(item.kind === "img" ? "Delete picture" : "Delete message", TRASH_SVG, "danger", () => show(true)));
+        }
+    }
+    show(false);
+    return bar;
+}
+
+function findRow(mid) {
+    return MID_RE.test(mid) ? logEl.querySelector('.msg[data-mid="' + mid + '"]') : null;
+}
+
+// Swaps the message bubble for a small box with the text, Save and Cancel.
+function startEdit(item, bar) {
+    const wrap = bar.parentElement;
+    const bubble = wrap.querySelector(".bubble");
+    if (!bubble || wrap.querySelector(".edit-form")) return;
+
+    const form = document.createElement("form");
+    form.className = "edit-form";
+    const input = document.createElement("input");
+    input.className = "field edit-input";
+    input.type = "text";
+    input.maxLength = 300;
+    input.value = item.text;
+    input.setAttribute("aria-label", "Edit your message");
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "btn small blue";
+    save.textContent = "Save";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn small";
+    cancel.textContent = "Cancel";
+    const hint = document.createElement("small");
+    hint.className = "edit-hint";
+    hint.textContent = "Enter to save, Esc to cancel";
+    form.append(input, save, cancel, hint);
+
+    const close = () => { form.remove(); bubble.hidden = false; bar.hidden = false; };
+    cancel.addEventListener("click", close);
+    input.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } });
+    form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text || text === item.text) { close(); return; }      // nothing changed (an empty message isn't allowed)
+        if (sendEdit(item, text)) close();                          // the new text shows up when the server confirms
+    });
+
+    bubble.hidden = true;
+    bar.hidden = true;
+    wrap.append(form);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function sendEdit(item, text) {
+    if (!sendPacket("EDIT", myId, myName, mySecret + "|" + item.mid + "|" + text)) {
+        addSystem("Couldn't edit your message: not connected.", current);
+        return false;
+    }
+    return true;
+}
+
+function sendDelete(item) {
+    if (!sendPacket("DELETE", myId, myName, mySecret + "|" + item.mid)) {
+        addSystem("Couldn't delete your message: not connected.", current);
+    }
+}
+
+// The server tells everybody (this tab included) that a message was edited or deleted.
+function applyRemote(m) {
+    if (!joined) return;
+    const a = splitPayload(m.payload);               // channel | rest
+    if (m.type === "EDITED") {
+        const k = a.text.indexOf("|");
+        if (k > 0) applyEdited(a.ch, a.text.slice(0, k), m.name, a.text.slice(k + 1));
+    } else {
+        applyDeleted(a.ch, a.text, m.name);
+    }
+}
+
+// Finds a message we hold by its id. It must also be written by `name`: a notice about
+// somebody else's message is ignored.
+function findOwned(ch, mid, name) {
+    if (!MID_RE.test(mid) || !store[ch]) return -1;
+    const at = store[ch].items.findIndex((it) => it.mid === mid && it.kind !== "sys");
+    if (at < 0 || !same(store[ch].items[at].name, name)) return -1;
+    return at;
+}
+
+function applyEdited(ch, mid, name, text) {
+    const at = findOwned(ch, mid, name);
+    if (at < 0) return;
+    const item = store[ch].items[at];
+    if (item.kind !== "msg") return;
+    item.text = text;
+    item.edited = true;
+    const row = ch === current ? findRow(mid) : null;
+    const bubble = row && row.querySelector(".bubble");
+    if (bubble) fillBubble(bubble, item);
+}
+
+function applyDeleted(ch, mid, name) {
+    const at = findOwned(ch, mid, name);
+    if (at < 0) return;
+    const gone = store[ch].items.splice(at, 1)[0];
+    forgetItem(gone);
+    if (ch !== current) return;
+    const stick = nearBottom();
+    const top = logEl.scrollTop;
+    renderChannel();                                  // closes the gap and fixes the grouping and date dividers
+    if (!stick) logEl.scrollTop = top;
 }
 
 // ---------- pictures ----------
@@ -969,7 +1180,7 @@ function onImageHeader(m) {
     if (!sane) return;
 
     const item = { kind: "img", id: m.id, name: m.name, ts: Date.now(), imgId: picId, mime, size, w, h,
-                   status: "receiving", progress: 0, blob: null };
+                   mid: picId, status: "receiving", progress: 0, blob: null };
     images.set(picId, item);
     incoming.set(picId, { item, parts: new Array(total), got: 0, total,
                           timer: setTimeout(() => failPicture(picId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) });
@@ -1125,7 +1336,7 @@ async function sendImage(file, ch) {
 
     const picId = newPicId();
     const item = { kind: "img", id: myId, name: myName, ts: Date.now(), imgId: picId, mime: pic.mime,
-                   size: pic.blob.size, w: pic.w, h: pic.h, status: "sending", progress: 0, blob: pic.blob };
+                   mid: picId, size: pic.blob.size, w: pic.w, h: pic.h, status: "sending", progress: 0, blob: pic.blob };
     images.set(picId, item);
     storedBytes += pic.blob.size;
     addItem(ch, item);
@@ -1148,6 +1359,8 @@ async function sendImage(file, ch) {
     item.progress = 1;
     item.status = "ready";
     updatePicUI(item);
+    const sentRow = findRow(item.mid);
+    if (sentRow) sentRow.classList.remove("busy");   // sent: its Delete button can show now
     trimPictures();
 }
 
@@ -1316,11 +1529,11 @@ function handleServerReply(m) {
         return true;
     }
     if (m.type === "HIST") {
-        // name = who wrote it, payload = channel|timestamp|text
+        // name = who wrote it, payload = channel|timestamp|messageId|edited|text
         const a = splitPayload(m.payload);
-        const k = a.text.indexOf("|");
-        if (historyBuf && historyBuf[a.ch] && k >= 0) {
-            historyBuf[a.ch].push({ user: m.name, ts: Number(a.text.slice(0, k)) || Date.now(), text: a.text.slice(k + 1) });
+        const f = takeFields(a.text, 3);               // timestamp, messageId, edited, text
+        if (historyBuf && historyBuf[a.ch] && a.text.indexOf("|") >= 0) {
+            historyBuf[a.ch].push({ user: m.name, ts: Number(f[0]) || Date.now(), mid: f[1], edited: f[2] === "1", text: f[3] });
         }
         return true;
     }
@@ -1356,6 +1569,13 @@ function handleServerReply(m) {
     }
     if (m.type === "PICERR") {
         failPicture(m.name, "Picture is no longer saved");
+        return true;
+    }
+    if (m.type === "EDITERR" || m.type === "DELETEERR") {
+        // name = the reason
+        const what = m.type === "EDITERR" ? "edit" : "delete";
+        logLine("System", "Couldn't " + what + " the message: " + m.name);
+        addSystem("Couldn't " + what + " that message: " + m.name, current);
         return true;
     }
     if (m.type === "SAVEERR") {
@@ -1401,7 +1621,8 @@ function finishHistory() {
             store[c.id].items = (historyBuf[c.id] || []).map((m) => {
                 const who = same(m.user, myName) ? myId : "h:" + m.user.toLowerCase();
                 return savedPicture(m, who) || {
-                    kind: "msg", id: who, name: m.user, text: m.text, ts: m.ts, mention: false
+                    kind: "msg", id: who, name: m.user, text: m.text, ts: m.ts, mention: false,
+                    mid: m.mid, edited: !!m.edited
                 };
             });
         });
@@ -1420,7 +1641,7 @@ function savedPicture(m, who) {
     const picId = f[0], mime = f[1], size = +f[2], w = +f[3], h = +f[4];
     if (!picId || IMAGE_TYPES.indexOf(mime) < 0 || !(size > 0) || !(w >= 1) || !(h >= 1)) return null;
     const item = { kind: "img", id: who, name: m.user, ts: m.ts, imgId: picId, mime, size, w, h,
-                   status: "saved", saved: true, progress: 0, blob: null };
+                   mid: m.mid || picId, status: "saved", saved: true, progress: 0, blob: null };
     images.set(picId, item);
     return item;
 }
@@ -1439,16 +1660,17 @@ function fetchSaved(item) {
 }
 
 // Tell the server to keep this message (it also reaches everyone live through MSG).
-function saveMessage(ch, text) {
-    sendPacket("SAVE", myId, ch, Date.now() + "|" + text);
+function saveMessage(ch, text, mid) {
+    sendPacket("SAVE", myId, ch, Date.now() + "|" + mid + "|" + text);
 }
 
 $("chatForm").addEventListener("submit", (e) => {
     e.preventDefault();
     const text = msgInput.value.trim();
     if (!text || !joined) return;
-    if (sendPacket("MSG", myId, myName, current + "|" + text)) {
-        saveMessage(current, text);
+    const mid = newMsgId();
+    if (sendPacket("MSG", myId, myName, current + "|" + mid + "|" + text)) {
+        saveMessage(current, text, mid);
         msgInput.value = "";
         drafts[current] = "";
         cancelTyping();

@@ -13,6 +13,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 - **Accounts**: sign up and log in with a username (2–16 characters, case-insensitive and unique) and a password.
 - **Four channels**: `#general`, `#random`, `#help` and `#memes`.
 - **Live messaging**: messages are broadcast to everyone through the WebSocket server (limit: 300 characters per message).
+- **Edit and delete your own messages**: hover over one of your messages (or look under it on a phone) to edit it or delete it. Edited messages show an "(edited)" note. Nobody else can edit or delete your messages: the server enforces it (see below).
 - **Chat history**: messages are saved in SQLite. The newest 100 messages per channel are loaded after login or a server restart.
 - **Picture sharing**: attach or drag-and-drop images (JPEG, PNG, GIF, WebP). They are compressed in the browser, sent in chunks, saved in the database and reloaded when they scroll into view.
 - **Typing indicator**: see who is typing in each channel.
@@ -36,9 +37,10 @@ TYPE|id|name|payload
 | `HISTORY` | Request saved messages |
 | `USERS` | Request the list of registered accounts |
 | `SAVE` | Store a chat message |
+| `EDIT` / `DELETE` | Edit or delete a saved message (author only, checked by the server) |
 | `IMGH` / `IMGC` / `IMGGET` | Send a picture (header, chunks) / request a saved picture |
 
-Anything else is treated as live chat and broadcast to all connected clients. The server replies to account and history requests only to the requesting client.
+Anything else is treated as live chat and broadcast to all connected clients. The server announces accepted edits and deletes to everyone with `EDITED` and `DELETED` packets, and ignores any client that tries to send those itself. The server replies to account and history requests only to the requesting client.
 
 ### Schematic diagram
 
@@ -60,6 +62,25 @@ The diagram shows how the pieces fit together:
 The interface was designed in Figma before it was built. The screenshot below shows the design file, with frames for the schematic diagram, the login page, the register page, the general chat and the voice chat lounge.
 
 ![BISCORD Figma design file](docs/Figma_Design.png)
+
+### Editing and deleting messages
+
+Every message gets an id when it is sent, and the id is saved with the message in the database (`messages.mid`, plus an `edited` flag). Edit and delete use that id.
+
+**Only the author can change a message.** The server checks two things on every `EDIT` and `DELETE` request, and refuses the request if either one fails:
+
+1. **The request must carry the login secret.** When you log in or sign up, your browser sends a private random secret with the password. The server remembers it for that login and never broadcasts it. Tab ids are visible to everyone in live chat, so a tab id alone cannot be used to act as someone else.
+2. **The message must belong to the logged-in user.** The server looks up who wrote the message in the database and compares it with the logged-in user. The `UPDATE` and `DELETE` statements repeat this author check in their `WHERE` clause.
+
+The Edit and Delete buttons only appear on your own messages, but that is a convenience. Hiding the buttons is not what protects other people's messages. The server's checks above are.
+
+The server also ignores fake `EDITED` / `DELETED` announcements sent by clients, and the browser ignores any such announcement that was relayed from another client.
+
+**Notes**
+
+- Pictures can be deleted but not edited. Deleting a picture also removes its saved data from the database.
+- Messages saved before this feature existed get an id automatically the first time the new server starts (`old1`, `old2`, ...), so their authors can edit or delete them too. The two new columns are added to `chatterbox.db` automatically. Keep a copy of the database file first if you want a backup.
+- If you were logged in when the server was updated, log out and back in so your login gets its secret.
 
 ### Project structure
 
@@ -223,10 +244,11 @@ The chat page connects to `ws://<host>:8000`. Accounts, history, pictures and li
 2. **Sign up**: choose a username (2–16 characters) and a password, then submit. Next time, use **Log in**.
 3. **Chat**: you land on `#general`. Pick another channel (`#random`, `#help`, `#memes`) from the left sidebar.
 4. **Send a message**: type in the box at the bottom and press **Enter** or click **Send** (max 300 characters).
-5. **Send a picture**: click the attach button, or drag and drop an image onto the chat. Pictures are resized and compressed automatically.
-6. **See who is around**: the members panel on the right shows online users and the total number of registered accounts. A "typing" indicator appears when someone is writing.
-7. **Debug**: expand the connection console at the bottom to watch packets going back and forth.
-8. **Log out** with the log-out button in the sidebar.
+5. **Edit or delete a message**: hover over one of your own messages and click the pencil to edit it (Enter saves, Esc cancels) or the bin to delete it (you are asked to confirm). Both changes appear instantly for everyone in the channel. Other people's messages have no buttons.
+6. **Send a picture**: click the attach button, or drag and drop an image onto the chat. Pictures are resized and compressed automatically.
+7. **See who is around**: the members panel on the right shows online users and the total number of registered accounts. A "typing" indicator appears when someone is writing.
+8. **Debug**: expand the connection console at the bottom to watch packets going back and forth.
+9. **Log out** with the log-out button in the sidebar.
 
 To test live chat, open the app in two different browsers (or one normal and one private window) and log in with two different accounts.
 
@@ -238,6 +260,7 @@ To test live chat, open the app in two different browsers (or one normal and one
 | Other devices cannot connect | Run `start-server.bat` as administrator once, and make sure all devices are on the same Wi-Fi. |
 | Blank chat or "session ended" message | Make sure the server is running the latest `app.bzg`, then log in again. |
 | `ERROR: database ... is not working` | Confirm the `database/` folder exists next to `app.bzg`. |
+| "Couldn't edit/delete that message" | Read the reason shown in the chat. If it says to log out and back in, do that. You can only change your own messages. |
 | Port 8000 already in use | Close the other program using it, or change the `http(8000)` value in `app.bzg` (and `PORT` in `start-server.bat`). |
 
 ---
@@ -245,6 +268,7 @@ To test live chat, open the app in two different browsers (or one normal and one
 ## Notes & Limitations
 
 - This is a personal / learning project: **passwords are stored as plain text** and there is no real security. Do not reuse a real password.
+- Edited messages keep their original time and show "(edited)". There is no edit history.
 - Messages are limited to 300 characters; pictures are compressed to roughly 160 KB before sending.
 - The channel list is defined in `app.bzg` (`CHANNELS`) and must be kept in sync with the client.
 

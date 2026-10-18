@@ -796,3 +796,79 @@ body {
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ------------------------------------------------------------
+   EDIT / DELETE YOUR OWN MESSAGES
+   Only your own messages get these buttons (see makeActions in chat.js).
+------------------------------------------------------------ */
+.bwrap { position: relative; max-width: 100%; min-width: 0; }
+.msg-actions {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 12px;
+    box-shadow: 0 3px 0 var(--ink);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s;
+}
+/* Beside the bubble, on the side that has room: left of your right-aligned messages ... */
+.msg.mine .msg-actions { right: calc(100% + 10px); }
+/* ... and right of the left-aligned ones (your own message sent from another tab). */
+.msg:not(.mine) .msg-actions { left: calc(100% + 10px); }
+.msg-actions[hidden] { display: none; }
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions,
+.msg-actions.confirming { opacity: 1; pointer-events: auto; }
+.msg.busy .msg-actions { display: none; }
+
+.act-btn {
+    display: grid;
+    place-items: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 6px;
+    font-family: var(--display);
+    font-size: 14px;
+    letter-spacing: .3px;
+    color: var(--ink);
+    background: var(--white);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.act-btn:hover, .act-btn:focus-visible { background: var(--yellow); border-color: var(--ink); outline: none; }
+.act-btn.danger:hover, .act-btn.danger:focus-visible { background: var(--pink); }
+.act-btn.text { display: block; line-height: 24px; }
+.act-ask { padding: 0 6px; font-size: 13px; font-weight: 800; white-space: nowrap; }
+
+.bubble .edited { font-size: 11px; font-weight: 700; opacity: .75; white-space: nowrap; }
+
+.edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: min(520px, 100%); }
+.edit-input { flex: 1 1 220px; min-width: 0; padding: 8px 12px; }
+.edit-hint { flex-basis: 100%; padding: 0 4px; font-size: 12px; color: #5b5273; }
+.msg.mine .edit-hint { text-align: right; }
+
+/* Narrow screens: the buttons sit under the bubble instead of beside it. */
+@media (max-width: 900px) {
+    .bwrap { display: flex; flex-direction: column; align-items: flex-end; }
+    .msg:not(.mine) .bwrap { align-items: flex-start; }
+    .msg-actions, .msg.mine .msg-actions, .msg:not(.mine) .msg-actions {
+        position: static;
+        transform: none;
+        margin-top: 8px;
+        box-shadow: none;
+    }
+}
+
+/* No hover on touch screens: always show the buttons on your own messages. */
+@media (hover: none) {
+    .msg-actions { opacity: 1; pointer-events: auto; }
+}

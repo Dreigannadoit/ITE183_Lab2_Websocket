@@ -24,18 +24,32 @@ var server = http(8000);
 //     LOGOUT|id||                           (forget this login)
 //     HISTORY|id||
 //     USERS|id||                            ("who has an account?" for the member panel)
-//     SAVE|id|channel|timestamp|text        (payload is  timestamp|text)
+//     SAVE|id|channel|timestamp|text        (payload is  timestamp|messageId|text)
+//     EDIT|id||secret|messageId|newText     (only the author may edit, see doEdit)
+//     DELETE|id||secret|messageId           (only the author may delete, see doDelete)
 //
 //   server -> that one client
 //     AUTHOK|id|username|                   (answer to SIGNUP, LOGIN and RESUME)
 //     AUTHERR|id|message|
-//     HIST|id|user|channel|timestamp|text   (one per saved message)
+//     HIST|id|user|channel|timestamp|messageId|edited|text   (one per saved message)
 //     HISTEND|id||
 //     USER|id|username|                     (one per registered account)
 //     USEREND|id||
 //     SAVEERR|id|message|
+//     EDITERR|id|message|                   (an edit was refused)
+//     DELETEERR|id|message|                 (a delete was refused)
+//
+//   server -> everyone (only the server may send these; a client that sends one is ignored)
+//     EDITED||username|channel|messageId|newText
+//     DELETED||username|channel|messageId
 //
 // Anything else is a live chat packet and is broadcast to everyone, as before.
+//
+// LOGIN and SIGNUP carry a one-off secret from the browser in front of the password
+// (payload = secret|password). The secret is kept next to the login and is never
+// broadcast, so a tab id (which everybody can see in live chat) is not enough to edit or
+// delete somebody else's message: EDIT and DELETE must present the secret AND the message
+// must belong to the logged-in user.
 //
 // Personal project: passwords are plain text and there is no real security.
 
@@ -57,6 +71,7 @@ var DB_FILE = "database/chatterbox.db";
 // ------------------------------------------
 var sessId = [];        // browser tab id that logged in
 var sessName = [];      // ...and the username it logged in as
+var sessSecret = [];    // ...and the secret that tab proved at login (never broadcast)
 
 // ------------------------------------------
 // SMALL HELPERS
@@ -125,6 +140,7 @@ function nextLine(text) {
 }
 
 var DIGITS = "0123456789";
+var ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";   // allowed in picture ids, message ids and secrets
 
 // true if `s` is 1..maxLen characters, all taken from `allowed`
 function onlyChars(s, allowed, maxLen) {
@@ -215,10 +231,11 @@ function findSession(id) {
     return -1;
 }
 
-function startSession(id, name) {
+function startSession(id, name, secret) {
     var at = findSession(id);
     if (at >= 0) {
         sessName[at] = name;
+        sessSecret[at] = secret;
         return;
     }
     // reuse a slot freed by a log out, otherwise add a new one
@@ -227,12 +244,14 @@ function startSession(id, name) {
         if (sessId[i] == "") {
             sessId[i] = id;
             sessName[i] = name;
+            sessSecret[i] = secret;
             return;
         }
         i = i + 1;
     }
     sessId[sizeof(sessId)] = id;
     sessName[sizeof(sessName)] = name;
+    sessSecret[sizeof(sessSecret)] = secret;
 }
 
 function endSession(id) {
@@ -240,7 +259,21 @@ function endSession(id) {
     if (at >= 0) {
         sessId[at] = "";
         sessName[at] = "";
+        sessSecret[at] = "";
     }
+}
+
+// a secret from the browser: 12..40 characters from ID_CHARS
+function secretValid(secret) {
+    return sizeof(secret) >= 12 && onlyChars(secret, ID_CHARS, 40);
+}
+
+// true if `token` is the secret this login (session slot s) proved when it logged in
+function secretOk(s, token) {
+    if (sizeof(token) < 1) {
+        return false;
+    }
+    return sessSecret[s] == token;
 }
 
 function channelKnown(ch) {
@@ -284,6 +317,17 @@ function dbQuery(sql) {
     return db.query(sql);
 }
 
+// Like dbExec, but a failure is expected and not reported (used for the upgrade steps
+// below, where "column already exists" is the normal answer on every start after the first).
+function dbTry(sql) {
+    var r = db.exec(sql);
+    if (r != 1) {
+        dbReopen();
+        return false;
+    }
+    return true;
+}
+
 function createTables() {
     // username is UNIQUE and COLLATE NOCASE: "Drei" and "drei" are the same account
     dbExec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username VARCHAR(16) NOT NULL UNIQUE COLLATE NOCASE, password VARCHAR(100) NOT NULL, created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')));");
@@ -302,6 +346,17 @@ function createTables() {
     }
 }
 
+// Adds the columns used by edit / delete to databases made by an older version.
+//   mid     the message's id (made by the browser). Edit and delete find a message by it.
+//   edited  1 once the author has edited the message
+// Messages saved before this existed get an id like "old12" so they can be edited too.
+function upgradeTables() {
+    dbTry("ALTER TABLE messages ADD COLUMN mid VARCHAR(24);");
+    dbTry("ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;");
+    dbExec("UPDATE messages SET mid = 'old' || id WHERE mid IS NULL;");
+    dbExec("CREATE INDEX IF NOT EXISTS idx_messages_mid ON messages (mid);");
+}
+
 // ts must be digits only (it is placed in SQL as a number); anything else becomes 0
 function cleanTs(ts) {
     if (onlyChars(ts, DIGITS, 15)) {
@@ -310,17 +365,18 @@ function cleanTs(ts) {
     return "0";
 }
 
-// Stores one message. `user` must be an existing username, `channel` a name from CHANNELS.
-function addLog(channel, user, ts, text) {
-    return dbExec("INSERT INTO messages (channel_id, user_id, ts, text) VALUES ((SELECT id FROM channels WHERE name = "
+// Stores one message. `user` must be an existing username, `channel` a name from CHANNELS,
+// `mid` the message's id (letters and digits only, already checked by the caller).
+function addLog(channel, user, ts, text, mid) {
+    return dbExec("INSERT INTO messages (channel_id, user_id, ts, text, mid) VALUES ((SELECT id FROM channels WHERE name = "
             + sqlStr(channel) + "), (SELECT id FROM users WHERE username = " + sqlStr(user) + "), "
-            + cleanTs(ts) + ", " + sqlStr(text) + ");");
+            + cleanTs(ts) + ", " + sqlStr(text) + ", " + sqlStr(mid) + ");");
 }
 
 // ------------------------------------------
 // ACCOUNTS
 // ------------------------------------------
-function doSignup(clientId, id, name, password) {
+function doSignup(clientId, id, name, password, secret) {
     if (sizeof(name) < 2 || sizeof(name) > 16) {
         reply(clientId, "AUTHERR", id, "Username needs 2 to 16 characters.", "");
         return;
@@ -342,11 +398,11 @@ function doSignup(clientId, id, name, password) {
     }
     print("New user confirmed: " + name);
 
-    startSession(id, name);
+    startSession(id, name, secret);
     reply(clientId, "AUTHOK", id, name, "");
 }
 
-function doLogin(clientId, id, name, password) {
+function doLogin(clientId, id, name, password, secret) {
     var rows = dbQuery("SELECT username, password FROM users WHERE username = " + sqlStr(name) + ";");
     if (rowCount(rows) < 1) {
         print("Login refused: no account named " + name);
@@ -358,7 +414,7 @@ function doLogin(clientId, id, name, password) {
         reply(clientId, "AUTHERR", id, "Wrong username or password.", "");
         return;
     }
-    startSession(id, rows[0].username);
+    startSession(id, rows[0].username, secret);
     reply(clientId, "AUTHOK", id, rows[0].username, "");
 }
 
@@ -383,19 +439,28 @@ function doSave(clientId, id, channel, payload) {
         reply(clientId, "SAVEERR", id, "Please log in again.", "");
         return;
     }
-    var pair = parsePair(payload);
-    var text = pair[1];
+    var pair = parsePair(payload);          // timestamp | messageId|text
+    var idText = parsePair(pair[1]);        // messageId | text
+    var mid = idText[0];
+    var text = idText[1];
     if (sizeof(text) > MAX_TEXT) {
         text = substr(text, 0, MAX_TEXT);
     }
     if (!channelKnown(channel) || sizeof(text) < 1) {
         return;
     }
+    if (!onlyChars(mid, ID_CHARS, 24)) {
+        print("Message not saved: bad message id");
+        return;
+    }
+    if (rowCount(dbQuery("SELECT id FROM messages WHERE mid = " + sqlStr(mid) + " LIMIT 1;")) > 0) {
+        return;                              // that id is already taken: never overwrite or duplicate
+    }
     if (substr(text, 0, 5) == "[img]") {
         text = " " + text;     // typed text can't pretend to be a saved picture
     }
 
-    addLog(channel, sessName[s], pair[0], text);
+    addLog(channel, sessName[s], pair[0], text, mid);
 }
 
 function doHistory(clientId, id) {
@@ -411,7 +476,7 @@ function doHistory(clientId, id) {
         var ch = CHANNELS[c];
 
         // Newest HISTORY_PER_CHANNEL messages of this channel (newest first) ...
-        var rows = dbQuery("SELECT u.username AS username, CAST(m.ts AS TEXT) AS ts, m.text AS text FROM messages m "
+        var rows = dbQuery("SELECT u.username AS username, CAST(m.ts AS TEXT) AS ts, COALESCE(m.mid, '') AS mid, CAST(m.edited AS TEXT) AS edited, m.text AS text FROM messages m "
                             + "JOIN users u ON u.id = m.user_id JOIN channels c ON c.id = m.channel_id "
                             + "WHERE c.name = " + sqlStr(ch) + " ORDER BY m.id DESC LIMIT " + HISTORY_PER_CHANNEL + ";");
 
@@ -419,7 +484,7 @@ function doHistory(clientId, id) {
         print("History for " + sessName[findSession(id)] + " #" + ch + ": " + rowCount(rows) + " message(s) found");
         var i = rowCount(rows) - 1;
         while (i >= 0) {
-            reply(clientId, "HIST", id, rows[i].username, ch + "|" + rows[i].ts + "|" + rows[i].text);
+            reply(clientId, "HIST", id, rows[i].username, ch + "|" + rows[i].ts + "|" + rows[i].mid + "|" + rows[i].edited + "|" + rows[i].text);
             i = i - 1;
         }
         c = c + 1;
@@ -458,7 +523,6 @@ function doUsers(clientId, id) {
 // A client asks for a saved picture with IMGGET and gets PICH + PICC packets back
 // (to that client only). Pictures are only loaded when they scroll into view.
 var IMG_MARK = "[img]";
-var ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
 var pendId = [];      // picId being received ("" = free slot)
 var pendOwner = [];   // tab id of the sender
 var pendUser = [];
@@ -635,7 +699,7 @@ function picChunk(id, payload) {
 
     if (("" + pendGot[at]) == pendTotal[at]) {
         var logged = addLog(pendCh[at], pendUser[at], pendTs[at],
-               IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at]);
+               IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at], picId);
         if (logged) {
             print("Saved picture " + picId + " from " + pendUser[at] + " (" + pendTotal[at] + " pieces)");
         } else {
@@ -669,7 +733,132 @@ function sendPicture(clientId, id, picId) {
     }
 }
 
+// ------------------------------------------
+// EDIT AND DELETE (author only)
+// ------------------------------------------
+// Two checks must BOTH pass, so nobody can touch another person's message:
+//   1. the packet carries the secret this tab proved at login (a tab id alone is not enough,
+//      because tab ids are visible to everyone in live chat), and
+//   2. the message's author in the database is the user this login belongs to.
+// The UPDATE / DELETE statements repeat the author check in their WHERE clause.
+
+// The saved message with this id: [ { username, channel, text } ], or an empty array.
+function findMessage(mid) {
+    return dbQuery("SELECT u.username AS username, c.name AS channel, m.text AS text FROM messages m "
+                   + "JOIN users u ON u.id = m.user_id JOIN channels c ON c.id = m.channel_id "
+                   + "WHERE m.mid = " + sqlStr(mid) + " LIMIT 1;");
+}
+
+// payload = secret|messageId|newText
+function doEdit(clientId, id, payload) {
+    var s = findSession(id);
+    if (s < 0) {
+        reply(clientId, "EDITERR", id, "Please log in again.", "");
+        return;
+    }
+    var a = parsePair(payload);             // secret | messageId|newText
+    if (!secretOk(s, a[0])) {
+        print("Edit refused: wrong secret for " + sessName[s]);
+        reply(clientId, "EDITERR", id, "Please log out and back in, then try again.", "");
+        return;
+    }
+    var b = parsePair(a[1]);                // messageId | newText
+    var mid = b[0];
+    var text = b[1];
+    if (!onlyChars(mid, ID_CHARS, 24)) {
+        reply(clientId, "EDITERR", id, "That message could not be found.", "");
+        return;
+    }
+    if (sizeof(text) > MAX_TEXT) {
+        text = substr(text, 0, MAX_TEXT);
+    }
+    if (sizeof(text) < 1) {
+        reply(clientId, "EDITERR", id, "A message can't be empty. Delete it instead.", "");
+        return;
+    }
+    if (substr(text, 0, 5) == IMG_MARK) {
+        text = " " + text;                  // typed text can't pretend to be a saved picture
+    }
+
+    var rows = findMessage(mid);
+    if (rowCount(rows) < 1) {
+        reply(clientId, "EDITERR", id, "That message no longer exists.", "");
+        return;
+    }
+    if (lower(rows[0].username) != lower(sessName[s])) {
+        print("Edit refused: " + sessName[s] + " tried to edit a message by " + rows[0].username);
+        reply(clientId, "EDITERR", id, "You can only edit your own messages.", "");
+        return;
+    }
+    if (substr(rows[0].text, 0, 5) == IMG_MARK) {
+        reply(clientId, "EDITERR", id, "Pictures can't be edited. You can delete them.", "");
+        return;
+    }
+
+    var ok = dbExec("UPDATE messages SET text = " + sqlStr(text) + ", edited = 1 WHERE mid = " + sqlStr(mid)
+                    + " AND user_id = (SELECT id FROM users WHERE username = " + sqlStr(sessName[s]) + ");");
+    if (!ok) {
+        reply(clientId, "EDITERR", id, "Could not save the change. Check the server window.", "");
+        return;
+    }
+    print("Message " + mid + " edited by " + sessName[s]);
+    server.sendAll("EDITED||" + rows[0].username + "|" + rows[0].channel + "|" + mid + "|" + text);
+}
+
+// payload = secret|messageId
+function doDelete(clientId, id, payload) {
+    var s = findSession(id);
+    if (s < 0) {
+        reply(clientId, "DELETEERR", id, "Please log in again.", "");
+        return;
+    }
+    var a = parsePair(payload);             // secret | messageId
+    if (!secretOk(s, a[0])) {
+        print("Delete refused: wrong secret for " + sessName[s]);
+        reply(clientId, "DELETEERR", id, "Please log out and back in, then try again.", "");
+        return;
+    }
+    var mid = a[1];
+    if (!onlyChars(mid, ID_CHARS, 24)) {
+        reply(clientId, "DELETEERR", id, "That message could not be found.", "");
+        return;
+    }
+
+    var rows = findMessage(mid);
+    if (rowCount(rows) < 1) {
+        reply(clientId, "DELETEERR", id, "That message no longer exists.", "");
+        return;
+    }
+    if (lower(rows[0].username) != lower(sessName[s])) {
+        print("Delete refused: " + sessName[s] + " tried to delete a message by " + rows[0].username);
+        reply(clientId, "DELETEERR", id, "You can only delete your own messages.", "");
+        return;
+    }
+
+    // a picture message is "[img]picId,mime,..." : its picture data goes too
+    var picId = "";
+    if (substr(rows[0].text, 0, 5) == IMG_MARK) {
+        var k = indexOfChar(rows[0].text, ",", 5);
+        if (k > 5) {
+            picId = substr(rows[0].text, 5, k - 5);
+        }
+    }
+
+    var ok = dbExec("DELETE FROM messages WHERE mid = " + sqlStr(mid)
+                    + " AND user_id = (SELECT id FROM users WHERE username = " + sqlStr(sessName[s]) + ");");
+    if (!ok) {
+        reply(clientId, "DELETEERR", id, "Could not delete the message. Check the server window.", "");
+        return;
+    }
+    if (picId != "" && onlyChars(picId, ID_CHARS, 24)) {
+        dbExec("DELETE FROM pictures WHERE pic_id = " + sqlStr(picId) + ";");
+    }
+    print("Message " + mid + " deleted by " + sessName[s]);
+    server.sendAll("DELETED||" + rows[0].username + "|" + rows[0].channel + "|" + mid);
+}
+
 createTables();
+upgradeTables();
 var cu = dbQuery("SELECT COUNT(*) AS n FROM users;");
 var cm = dbQuery("SELECT COUNT(*) AS n FROM messages;");
 if (rowCount(cu) > 0 && rowCount(cm) > 0) {
@@ -738,11 +927,14 @@ server.onData = function (message, clientId) {
     // Account and history packets are answered to the sender only, never broadcast.
     // Their content is not printed (it holds passwords).
     if (type == "SIGNUP" || type == "LOGIN") {
-        var a = parsePacket(message);          // type, id, username, password
-        if (type == "SIGNUP") {
-            doSignup(clientId, a[1], a[2], a[3]);
+        var a = parsePacket(message);          // type, id, username, secret|password
+        var sp = parsePair(a[3]);              // secret, password
+        if (!secretValid(sp[0])) {
+            reply(clientId, "AUTHERR", a[1], "Please reload the page and try again.", "");
+        } else if (type == "SIGNUP") {
+            doSignup(clientId, a[1], a[2], sp[1], sp[0]);
         } else {
-            doLogin(clientId, a[1], a[2], a[3]);
+            doLogin(clientId, a[1], a[2], sp[1], sp[0]);
         }
     }
     else if (type == "RESUME") {
@@ -764,6 +956,18 @@ server.onData = function (message, clientId) {
     else if (type == "USERS") {
         var us = parsePacket(message);         // type, id
         doUsers(clientId, us[1]);
+    }
+    else if (type == "EDIT") {
+        var ed = parsePacket(message);         // type, id, (name), secret|messageId|newText
+        doEdit(clientId, ed[1], ed[3]);
+    }
+    else if (type == "DELETE") {
+        var dl = parsePacket(message);         // type, id, (name), secret|messageId
+        doDelete(clientId, dl[1], dl[3]);
+    }
+    else if (type == "EDITED" || type == "DELETED") {
+        // Only the server sends these. If a client sends one it is a fake: do not pass it on.
+        print("Ignored a fake " + type + " packet from client " + clientId);
     }
     else if (type == "IMGGET") {
         var g = parsePacket(message);          // type, id, (name), picId
