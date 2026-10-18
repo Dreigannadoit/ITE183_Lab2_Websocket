@@ -960,7 +960,7 @@ body {
 .prof-banner {
     position: relative;
     z-index: 3;
-    height: 180px;
+    aspect-ratio: 3 / 1;   /* same shape as the saved backdrop (BACKDROP_W x BACKDROP_H in chat.js), so what you see is what is saved */
     background-color: var(--sky);
     background-image: radial-gradient(rgba(255, 255, 255, .38) 2px, transparent 2.5px);
     background-size: 18px 18px;
@@ -1577,3 +1577,29 @@ html.pt-came .join-card { animation: pop .55s cubic-bezier(.3, 1.6, .5, 1) .5s b
 @keyframes pt-rise { from { opacity: 0; transform: translateY(28px) scale(.98); } }
 @keyframes pt-from-left { from { opacity: 0; transform: translateX(-60px); } }
 @keyframes pt-from-right { from { opacity: 0; transform: translateX(60px); } }
+
+/* ----- adjusting the backdrop position (profile edit, see enableBackdropReposition in chat.js) ----- */
+.prof-banner.can-move { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.prof-banner.can-move.moving { cursor: grabbing; }
+.prof-banner.can-move:focus-visible { outline-offset: -7px; }
+.prof-banner-hint {
+    position: absolute;
+    left: 9px;
+    bottom: 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 11px 3px 8px;
+    font-family: var(--prof-text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--prof-black);
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 999px;
+    box-shadow: 0 3px 0 var(--prof-shadow);
+    pointer-events: none;
+    transition: opacity .2s, transform .2s;
+}
+.prof-banner.moving .prof-banner-hint, .prof-banner-hint.used { opacity: 0; transform: translateY(6px); }

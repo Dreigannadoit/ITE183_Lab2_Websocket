@@ -2538,6 +2538,7 @@ function startProfileEdit() {
         profDraft = { thought: p.thought, bio: p.bio, links: rows, color: p.color,
                       avatar: null, avatarGone: false, avatarPreview: "",
                       backdrop: null, backdropGone: false, backdropPreview: "",
+                      backdropFile: null, backdropDims: null, backdropPos: { x: 0.5, y: 0.5 },
                       saving: false, error: "" };
         profEditing = true;
     }, 1, () => {
@@ -2561,8 +2562,11 @@ function cancelProfileEdit() {
     }, -1, () => refreshProfile(profOpen));
 }
 
-// Crop to the middle of the picture so it fills w x h, then squeeze it under maxBytes.
-async function cropPicture(file, w, h, maxBytes) {
+// Crop the picture so it fills w x h, then squeeze it under maxBytes.
+// pos = { x, y } (0 to 1) says which part to keep when the picture is bigger than the frame in one direction:
+// 0 = left / top edge, 0.5 = the middle (default), 1 = right / bottom edge. Same meaning as CSS background-position.
+async function cropPicture(file, w, h, maxBytes, pos) {
+    const px = pos ? pos.x : 0.5, py = pos ? pos.y : 0.5;
     if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
     const src = await decodeImage(file);
     const sw = src.naturalWidth || src.width;
@@ -2570,7 +2574,7 @@ async function cropPicture(file, w, h, maxBytes) {
     if (!sw || !sh) throw new Error("Couldn't read that picture.");
     const scale = Math.max(w / sw, h / sh);
     const cw = w / scale, ch = h / scale;
-    const sx = (sw - cw) / 2, sy = (sh - ch) / 2;
+    const sx = (sw - cw) * px, sy = (sh - ch) * py;
     let quality = 0.86, ow = w, oh = h;
     for (let attempt = 0; attempt < 8; attempt++) {
         const canvas = document.createElement("canvas");
@@ -2593,14 +2597,30 @@ async function chooseProfilePicture(kind, file) {
     if (!d || !file) return;
     d.error = "";
     try {
-        const blob = kind === "avatar"
-            ? await cropPicture(file, AVATAR_PX, AVATAR_PX, AVATAR_MAX_BYTES)
-            : await cropPicture(file, BACKDROP_W, BACKDROP_H, BACKDROP_MAX_BYTES);
-        if (d !== profDraft) return;                    // the card was closed meanwhile
-        if (d[kind + "Preview"]) URL.revokeObjectURL(d[kind + "Preview"]);
-        d[kind] = blob;
-        d[kind + "Gone"] = false;
-        d[kind + "Preview"] = URL.createObjectURL(blob);
+        if (kind === "avatar") {
+            const blob = await cropPicture(file, AVATAR_PX, AVATAR_PX, AVATAR_MAX_BYTES);
+            if (d !== profDraft) return;                // the card was closed meanwhile
+            if (d.avatarPreview) URL.revokeObjectURL(d.avatarPreview);
+            d.avatar = blob;
+            d.avatarGone = false;
+            d.avatarPreview = URL.createObjectURL(blob);
+        } else {
+            // The backdrop is cropped when you press SAVE (see saveProfile), so until then you can drag the picture
+            // around inside the frame. The preview is the original picture; backdropPos says which part is shown.
+            if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
+            const src = await decodeImage(file);
+            const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
+            if (src.close) src.close();
+            if (!w || !h) throw new Error("Couldn't read that picture.");
+            if (d !== profDraft) return;
+            if (d.backdropPreview) URL.revokeObjectURL(d.backdropPreview);
+            d.backdropFile = file;
+            d.backdropDims = { w, h };
+            d.backdropPos = { x: 0.5, y: 0.5 };
+            d.backdrop = null;
+            d.backdropGone = false;
+            d.backdropPreview = URL.createObjectURL(file);
+        }
     } catch (err) {
         d.error = err.message;
     }
@@ -2611,6 +2631,7 @@ function removeProfilePicture(kind) {
     const d = profDraft;
     if (d[kind + "Preview"]) URL.revokeObjectURL(d[kind + "Preview"]);
     d[kind] = null;
+    d[kind + "File"] = null;
     d[kind + "Preview"] = "";
     d[kind + "Gone"] = true;
     renderProfile();
@@ -2626,6 +2647,79 @@ function filePicker(kind) {
         chooseProfilePicture(kind, f);
     });
     return input;
+}
+
+// ----- moving the backdrop picture inside its frame -----
+// The frame (.prof-banner) is always 3 : 1, the same shape as the saved backdrop, so what you see while dragging is what gets saved.
+// The picture covers the frame like CSS "background-size: cover" does; d.backdropPos is which part of it sticks out on each side.
+// Drag with the mouse or a finger, or focus the frame and use the arrow keys (Shift = bigger steps).
+const clamp01 = (n) => Math.min(1, Math.max(0, n));
+
+function setBackdropPos(banner, d, x, y) {
+    d.backdropPos = { x: clamp01(x), y: clamp01(y) };
+    banner.style.backgroundPosition = (d.backdropPos.x * 100) + "% " + (d.backdropPos.y * 100) + "%";
+}
+
+function enableBackdropReposition(banner, d, busy) {
+    const dims = d.backdropDims;
+    banner.style.backgroundPosition = (d.backdropPos.x * 100) + "% " + (d.backdropPos.y * 100) + "%";
+    // A picture that is already 3 : 1 fits exactly: there is nothing to move.
+    if (busy || Math.abs(dims.w / dims.h - BACKDROP_W / BACKDROP_H) < 0.01) return;
+
+    banner.classList.add("can-move");
+    banner.tabIndex = 0;
+    banner.setAttribute("role", "group");
+    banner.setAttribute("aria-label", "Backdrop position. Drag the picture, or use the arrow keys, to choose which part is shown.");
+    const hint = mk("span", "prof-banner-hint");
+    hint.setAttribute("aria-hidden", "true");
+    hint.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M12 2l-4 4M12 2l4 4M12 22l-4-4M12 22l4-4M2 12l4-4M2 12l4 4M22 12l-4-4M22 12l-4 4"/></svg>';
+    hint.append("Drag to reposition");
+    banner.append(hint);
+
+    // how far the picture sticks out of the frame, in pixels, across and down
+    const overflow = () => {
+        const r = banner.getBoundingClientRect();
+        const scale = Math.max(r.width / dims.w, r.height / dims.h);
+        return { x: dims.w * scale - r.width, y: dims.h * scale - r.height };
+    };
+
+    banner.addEventListener("pointerdown", (e) => {
+        if (e.button > 0 || e.target.closest(".prof-banner-tools")) return;
+        e.preventDefault();
+        const over = overflow();
+        const from = { x: e.clientX, y: e.clientY, px: d.backdropPos.x, py: d.backdropPos.y };
+        banner.setPointerCapture(e.pointerId);
+        banner.classList.add("moving");
+        hint.classList.add("used");
+        const move = (ev) => {
+            // dragging the picture to the right shows more of its left side, so the position goes down
+            setBackdropPos(banner, d,
+                over.x > 1 ? from.px - (ev.clientX - from.x) / over.x : from.px,
+                over.y > 1 ? from.py - (ev.clientY - from.y) / over.y : from.py);
+        };
+        const end = () => {
+            banner.classList.remove("moving");
+            banner.removeEventListener("pointermove", move);
+            banner.removeEventListener("pointerup", end);
+            banner.removeEventListener("pointercancel", end);
+        };
+        banner.addEventListener("pointermove", move);
+        banner.addEventListener("pointerup", end);
+        banner.addEventListener("pointercancel", end);
+    });
+
+    banner.addEventListener("keydown", (e) => {
+        const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+        if (!dir || e.target !== banner) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 0.15 : 0.05;
+        const over = overflow();
+        // the arrow moves the picture that way, like dragging does
+        setBackdropPos(banner, d,
+            over.x > 1 ? d.backdropPos.x - dir[0] * step : d.backdropPos.x,
+            over.y > 1 ? d.backdropPos.y - dir[1] * step : d.backdropPos.y);
+        hint.classList.add("used");
+    });
 }
 
 function renderProfileEdit(p) {
@@ -2646,6 +2740,7 @@ function renderProfileEdit(p) {
         iconButton("backdrop", "Change backdrop image", () => bpick.click(), { disabled: busy, end: true }),
         iconButton("remove", "Remove backdrop image", () => removeProfilePicture("backdrop"), { disabled: busy || !bgUrl, end: true }));
     banner.append(bannerTools, bpick);
+    if (d.backdropFile && d.backdropDims && !d.backdropGone) enableBackdropReposition(banner, d, busy);
 
     const body = mk("form", "prof-body prof-form");
     body.autocomplete = "off";
@@ -2778,6 +2873,10 @@ async function saveProfile() {
     d.error = "";
     renderProfile();
     try {
+        // the backdrop is cut out of the picture you chose, at the spot you dragged it to
+        if (d.backdropFile && !d.backdropGone) {
+            d.backdrop = await cropPicture(d.backdropFile, BACKDROP_W, BACKDROP_H, BACKDROP_MAX_BYTES, d.backdropPos);
+        }
         // the server answers PROFOK (or PROFERR) after PROFDONE
         const ack = new Promise((resolve, reject) => {
             profAck = { resolve, reject };
