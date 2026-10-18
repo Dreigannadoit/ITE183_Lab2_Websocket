@@ -650,6 +650,7 @@ function renderChannelHeader() {
 }
 
 function renderChannel() {
+    logEl.classList.remove("chan-in");   // a plain redraw (delete, trim) must not replay the switch animation
     unloadAllPics();   // the old channel's pictures leave the screen: free them
     const items = store[current].items;
     const nodes = [];
@@ -662,6 +663,7 @@ function switchChannel(ch) {
     if (ch === current) { closeDrawers(); return; }
     stopTyping();                       // we were typing in the old channel
     drafts[current] = msgInput.value;   // keep what was typed, per channel
+    const dir = CHANNELS.findIndex((c) => c.id === ch) > CHANNELS.findIndex((c) => c.id === current) ? 1 : -1;
     current = ch;
     msgInput.value = drafts[ch] || "";
     closeMentions();
@@ -670,9 +672,42 @@ function switchChannel(ch) {
     updateBadges();
     renderChannelHeader();
     renderChannel();
+    playChannelSwitch(dir);
     renderTyping();
     closeDrawers();
     if (!msgInput.disabled) msgInput.focus();
+}
+
+// ---------- channel switch animation ----------
+// The header swaps with a pop and a colour sweep, and the newest messages fly in one after another.
+// dir = 1 when the new channel is further down the list (content rises up), -1 when it is further up (content drops in).
+// The look itself lives in style.css under "CHANNEL SWITCH ANIMATION".
+const chanBarEl = document.querySelector(".chanbar");
+const CHAN_STAGGER_MAX = 10;   // only the newest messages are animated one by one (older ones are off screen)
+const CHAN_FX_MS = 1200;       // a little longer than the slowest animation
+let chanFxTimer = null;
+
+function playChannelSwitch(dir) {
+    // header
+    chanBarEl.style.setProperty("--dir", dir);
+    chanBarEl.classList.remove("chan-swap");
+    void chanBarEl.offsetWidth;                  // flush styles so the animation starts over
+    chanBarEl.classList.add("chan-swap");
+
+    // messages
+    const rows = Array.from(logEl.children).filter((el) => el !== typingEl);
+    rows.forEach((el) => { el.style.removeProperty("--i"); el.removeAttribute("data-still"); });
+    const first = Math.max(0, rows.length - CHAN_STAGGER_MAX);
+    rows.forEach((el, i) => {
+        if (i < first) el.setAttribute("data-still", "");     // scrolled out of view: no animation
+        else el.style.setProperty("--i", i - first);
+    });
+    logEl.style.setProperty("--dir", dir);
+    logEl.classList.remove("chan-in");
+    void logEl.offsetWidth;
+    logEl.classList.add("chan-in");
+    clearTimeout(chanFxTimer);
+    chanFxTimer = setTimeout(() => logEl.classList.remove("chan-in"), CHAN_FX_MS);
 }
 
 // ---------- messages ----------

@@ -1415,3 +1415,74 @@ body {
     .thought-tip.show::before, .thought-tip.show::after { transform: none; }
     .thought-tip.leaving { opacity: 0; }
 }
+
+
+/* ------------------------------------------------------------
+   CHANNEL SWITCH ANIMATION
+   Played by playChannelSwitch() in chat.js when you pick another channel.
+   - sidebar:  the button you picked pops into place and its # wiggles
+   - header:   # spins in, the name and topic slide in, a colour sweep runs along the bottom edge
+   - messages: the newest ones fly in one after another (--i = order, --dir = 1 down the list / -1 up the list)
+   (prefers-reduced-motion switches all of this off, see the rule further up.)
+------------------------------------------------------------ */
+.channel { transition: background-color .15s, color .15s, border-color .15s, box-shadow .15s; }
+.channel.active { animation: chan-select .5s cubic-bezier(.2, 1.6, .4, 1) both; }
+.channel.active .hash { animation: chan-hash-wiggle .55s ease-out .08s both; }
+@keyframes chan-select {
+    0% { transform: translateX(-8px) scale(.93); }
+    55% { transform: translateX(4px) scale(1.04); }
+    100% { transform: none; }
+}
+@keyframes chan-hash-wiggle {
+    0% { transform: rotate(0); }
+    30% { transform: rotate(-24deg) scale(1.3); }
+    60% { transform: rotate(14deg) scale(1.1); }
+    100% { transform: none; }
+}
+
+/* header */
+.chanbar { position: relative; }
+.chanbar::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -4px;                      /* covers the 4px ink border */
+    height: 4px;
+    pointer-events: none;
+    opacity: 0;
+    background: linear-gradient(90deg, var(--yellow), var(--pink), var(--sky)) no-repeat;
+    background-size: 40% 100%;
+    background-position: -150% 0;
+}
+.chanbar.chan-swap::after { animation: chan-sweep .7s cubic-bezier(.4, 0, .2, 1) both; }
+.chanbar.chan-swap .hash { animation: chan-hash-in .6s cubic-bezier(.2, 1.7, .4, 1) both; }
+.chanbar.chan-swap h2 { animation: chan-name-in .5s cubic-bezier(.2, 1.4, .4, 1) .05s both; }
+.chanbar.chan-swap .topic { animation: chan-topic-in .45s ease-out .16s both; }
+@keyframes chan-sweep {
+    0% { opacity: 1; background-position: -150% 0; }
+    90% { opacity: 1; }
+    100% { opacity: 0; background-position: 250% 0; }
+}
+@keyframes chan-hash-in {
+    from { opacity: 0; transform: rotate(calc(var(--dir, 1) * -140deg)) scale(.3); }
+}
+@keyframes chan-name-in {
+    from { opacity: 0; transform: translateY(calc(var(--dir, 1) * 16px)) skewX(calc(var(--dir, 1) * -8deg)); }
+}
+@keyframes chan-topic-in {
+    from { opacity: 0; transform: translateX(-12px); }
+}
+
+/* messages (overrides the single-message "slide" animation while a switch is playing) */
+.log.chan-in > :not(.typing) {
+    animation: chan-row-in .55s cubic-bezier(.2, 1.35, .4, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 40ms);
+}
+.log.chan-in > [data-still] { animation: none; }
+@keyframes chan-row-in {
+    from {
+        opacity: 0;
+        transform: translateY(calc(var(--dir, 1) * 36px)) scale(.94) rotate(calc(var(--dir, 1) * -1.2deg));
+    }
+}
