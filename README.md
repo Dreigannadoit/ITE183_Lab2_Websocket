@@ -68,6 +68,52 @@ The interface was designed in Figma before it was built. The screenshot below sh
 
 ![BISCORD Figma design file](docs/Figma_Design.png)
 
+### Screenshots
+
+Screenshots of the finished app. The **connection console** is the purple `>_` button at the bottom of each page; it expands into a live log of the packets going between the browser and the server.
+
+#### Login page
+
+![Login page with the console closed](docs/indexhtml_Login_console_closed.png)
+
+The login page (`login.html`) with the **Log in** tab selected. The status pill next to the button shows **Connected** once the WebSocket handshake with the server is complete. The collapsed console is the small purple button at the bottom right.
+
+![Login page with the console open](docs/indexhtml_Login_console_open.png)
+
+The same page with the console expanded. It logs the connection steps (`Connecting to ws://localhost:8000 ...` and `Handshake complete. WebSocket ready.`), tagged `[System]`, and can be cleared with the **Clear** button. The console can be dragged to another spot on the screen.
+
+#### Sign-up page
+
+![Sign-up page with the console open](docs/Register_console_open.png)
+
+The **Sign up** tab, where a new user picks a username (2 to 16 characters, the `|` symbol is not allowed) and a password, then types the password again to confirm it. **Create account** registers the user.
+
+#### Chat page
+
+![Main chat page with the console closed](docs/chathtml_Main_chat_console_closed.png)
+
+The main chat page, laid out like Discord. The left sidebar lists the channels (`#general`, `#random`, `#help`, `#memes`) and your user card with the connection status and the log-out button. The middle shows the messages of the current channel: your own messages are blue bubbles on the right, other people's are white bubbles on the left, and a picture can be sent with the image button. An `@mention` is highlighted. The right panel lists the members, with the online ones in green and a `you` tag on your own entry. The message box is at the bottom.
+
+![Main chat page with the console open](docs/chathtml_Main_chat_console_open.png)
+
+The chat page with the console open, showing the raw packets as they travel (`[Client]` for packets the browser sends, `[Server]` for packets the server sends back, `[System]` for notices such as `Username accepted. Joined as Drei.`). This is handy for debugging.
+
+#### Profile card
+
+![User profile card](docs/chathtml_User_profile_open.png)
+
+A profile card, opened by clicking your own user card or a member in the panel. It shows the backdrop picture, profile picture, thought bubble, username, online status, the date the user joined, the **About** text (with a character counter) and up to three links. On your own profile there is also an **Edit Profile** button.
+
+![Editing a profile](docs/chathtml_User_profile_edit.png)
+
+The edit view of your own profile. You can change the backdrop picture and the profile picture (or remove them with the red buttons), write a thought bubble and an **About You** text (up to 240 characters), and add up to three links, each with a name and a URL. **SAVE** applies the changes for everyone, and **Cancel** goes back without saving.
+
+#### 404 page
+
+![404 page](docs/404.png)
+
+The page shown for any unknown URL, for example `http://localhost:8000/this_doesnt_exist`. It matches the look of the rest of the app and has a **Back to BISCORD** button that returns to the login page.
+
 ### Editing and deleting messages
 
 Every message gets an id when it is sent, and the id is saved with the message in the database (`messages.mid`, plus an `edited` flag). Edit and delete use that id.
@@ -108,7 +154,8 @@ As with edit and delete, anyone logged in may **read** a profile, but every chan
 │   └── sqlite/sqlite.dll
 ├── docs/
 │   ├── Schematic_Diagram.jpg   # Architecture diagram used in this README
-│   └── Figma_Design.png        # Screenshot of the Figma UI design file
+│   ├── Figma_Design.png        # Screenshot of the Figma UI design file
+│   └── *.png                   # Screenshots of the login, sign-up, chat, profile and 404 pages
 ├── public/                 # Files served to the browser
 │   ├── login.html          # Login / sign-up page
 │   ├── chat.html           # Chat page
