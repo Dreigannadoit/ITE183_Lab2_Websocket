@@ -197,15 +197,19 @@ function placeJoinToasts() {
     joinToasts.style.bottom = (($("chatForm").offsetHeight || 0) + 14 + lift) + "px";
 }
 
-function showJoinToast(name) {
+function showJoinToast(name) { showPresenceToast(name, " joined the chat", "join"); }
+function showLeaveToast(name) { showPresenceToast(name, " left the chat", "leave"); }
+
+// One popup for someone arriving or leaving. Both kinds share the same stack in the corner.
+function showPresenceToast(name, suffix, kind) {
     placeJoinToasts();
     while (joinToasts.children.length >= MAX_JOIN_TOASTS) joinToasts.firstElementChild.remove();
     const t = document.createElement("div");
-    t.className = "join-toast";
+    t.className = "join-toast " + kind;
     const text = document.createElement("span");
     const who = document.createElement("b");
     who.textContent = name;
-    text.append(who, " joined the chat");
+    text.append(who, suffix);
     t.append(makeAvatar(name), text);
     joinToasts.append(t);
     setTimeout(() => dismissJoinToast(t), JOIN_TOAST_MS);
@@ -371,7 +375,7 @@ function handle(data) {
         clearTyper(m.id);
         if (peers.delete(m.id)) {
             renderUsers();
-            addSystem(m.name + " left the chat", "general");
+            if (m.id !== myId) showLeaveToast(m.name);
         }
     } else if (m.type === "MSG") {
         const msg = splitMsg(m.payload);
@@ -540,7 +544,7 @@ setInterval(() => {
     peers.forEach((p, id) => {
         if (id !== myId && now - p.seen > STALE_MS) {
             peers.delete(id);
-            addSystem(p.name + " left the chat", "general");
+            showLeaveToast(p.name);
         }
     });
     renderUsers();

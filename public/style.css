@@ -795,6 +795,9 @@ body {
     animation: toast-in .45s cubic-bezier(.3, 1.4, .5, 1) both;
 }
 .join-toast.leaving { animation: toast-out .3s ease-in both; }
+/* "left the chat" popups look the same, with a muted avatar so they read as a goodbye */
+.join-toast.leave { background: #ECE8F4; }
+.join-toast.leave .avatar { filter: grayscale(1); opacity: .75; }
 .join-toast .avatar { flex: none; width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
 
 @media (prefers-reduced-motion: reduce) {
