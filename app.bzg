@@ -710,9 +710,9 @@ server.get = function (path, data){
     }
 };
 
-// ==========================================
-// WEBSOCKET (WS) EVENT HANDLERS
-// ==========================================
+// =======================================================
+// =             WEBSOCKET (WS) EVENT HANDLERS            =
+// =======================================================
 
 server.onConnect = function (clientId) {
     print("WebSocket connected! Client ID: " + clientId);

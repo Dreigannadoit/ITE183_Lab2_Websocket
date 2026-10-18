@@ -1,248 +1,252 @@
-# BISCORD – Bonezegei WebSocket Chat (ITE183 Lab 2)
+# BISCORD
 
-A real-time group chat app with a Discord-style layout: channels on the left, the conversation in the middle, and who's online on the right. The whole server is one file written in **Bonezegei Script Language (`.bzg`)**: `app.bzg` serves the page, relays live chat, and handles accounts and saved chat. There is no Node.js. It serves a cartoon-style browser client with heavy outlines and a semi-3D look.
+A real-time, Discord-style chat web app written entirely in **BSL (Bonezegei Scripting Language)**. A single script, `app.bzg`, serves the web pages, relays live chat over WebSockets, manages user accounts and stores all chat history in a SQLite database. No Node.js is needed to run it.
 
-## Features
+---
 
-- **Accounts**: a **Sign up** page (username, password, confirm password) and a **Log in** page (username, password). Usernames are unique (case-insensitive), 2–16 characters, no `|`
-- **Saved chat**: every text message is stored in a SQLite database, so when you log in again the earlier conversation in each channel is already there (the last 100 per channel are sent on login)
-- **Log out** button in your user card
-- The same account can't be online twice at once (a second login is refused until the first tab closes)
-- **Join popups**: when someone joins, a small popup ("Name joined the chat") slides in at the bottom right for a few seconds instead of adding a line to the chat. Leave notices still appear in `#general`
-- **Members panel** (right side): lists **every registered user**. People who are online right now are highlighted in **green** and listed first; everyone else is shown in **greyscale**. The header shows "N online · M registered". Click anyone to insert an `@mention`
-- **Channels** (`#general`, `#random`, `#help`, `#memes`): each has its own messages, header and topic. Switch with a click or **Alt + Up/Down**
-- **Unread markers**: a channel you aren't viewing shows a dot when it has new messages, and a pink number badge when someone **@mentioned** you
-- **@mentions**: type `@Name` (or click a person in the Online list to insert it). Mentioned names are highlighted, and messages that mention you get a yellow highlight
-- **Drafts**: text you typed but didn't send is kept per channel when you switch
-- **Pictures**: send with the picture button, by pasting (Ctrl + V), or by dragging a file onto the chat. Everyone in the channel sees an animated placeholder with a progress bar while it arrives, then the picture. Click a picture to see it bigger
-- **Memory saving**: pictures you aren't looking at are released from memory (scrolled out of view, in another channel, or the tab hidden for 5 seconds). They reload, with the loading animation, when you come back
-- Messages from the same person within 5 minutes are **grouped** under one name and avatar, with a **Today / Yesterday** date divider
-- Chat bubbles with sender name, timestamp and a colored initial avatar
-- Your name and connection status in a user card at the bottom of the channel list
-- Auto-reconnect: if the connection drops, the client retries and tells everyone it is back
-- Live **typing indicator**, per channel: while someone types, everyone else *in that channel* sees bouncing dots and "Name is typing" under them ("Name and Name are typing" for two people, and so on)
-- Collapsible **Console** at the bottom left: a small `>_` square when closed that grows open with an animation. It shows the raw `[System]`, `[Server]` and `[Client]` traffic, like the original lab UI (handy for debugging connections). Drag it by its purple header (or the dotted grip) to put it anywhere; double-click the grip or press Escape on it to send it back to the bottom left. Arrow keys move it too, and it remembers its position.
-- Responsive layout: on phones the channel list and the online list become slide-in drawers (the **Channels** and **Who's here** buttons)
+## 1. Project Description
 
-## Project Structure
+BISCORD lets people on the same network sign up, log in and chat in real time in themed channels from any phone or laptop browser.
+
+### Features
+
+- **Accounts**: sign up and log in with a username (2–16 characters, case-insensitive and unique) and a password.
+- **Four channels**: `#general`, `#random`, `#help` and `#memes`.
+- **Live messaging**: messages are broadcast to everyone through the WebSocket server (limit: 300 characters per message).
+- **Chat history**: messages are saved in SQLite. The newest 100 messages per channel are loaded after login or a server restart.
+- **Picture sharing**: attach or drag-and-drop images (JPEG, PNG, GIF, WebP). They are compressed in the browser, sent in chunks, saved in the database and reloaded when they scroll into view.
+- **Typing indicator**: see who is typing in each channel.
+- **Member panel**: shows who is online and how many accounts are registered.
+- **Connection console**: a collapsible panel in the chat page that shows the raw packets, handy for debugging.
+- **Responsive layout**: works on phones and desktops.
+
+### How it works
+
+The server is one BSL program listening on **port 8000**. The same port handles both plain HTTP (pages and assets) and WebSocket traffic (chat, accounts, history). Everything the clients send is a text packet shaped like:
+
+```
+TYPE|id|name|payload
+```
+
+| Packet (client → server) | Purpose |
+| --- | --- |
+| `SIGNUP`, `LOGIN` | Create an account / log in |
+| `RESUME` | Chat page asks "is this tab still logged in?" |
+| `LOGOUT` | Forget this login |
+| `HISTORY` | Request saved messages |
+| `USERS` | Request the list of registered accounts |
+| `SAVE` | Store a chat message |
+| `IMGH` / `IMGC` / `IMGGET` | Send a picture (header, chunks) / request a saved picture |
+
+Anything else is treated as live chat and broadcast to all connected clients. The server replies to account and history requests only to the requesting client.
+
+### Schematic diagram
+
+![BISCORD schematic diagram](docs/Schematic_Diagram.jpg)
+
+The diagram shows how the pieces fit together:
+
+1. **Browser clients** (HTML, CSS and JavaScript) talk to the server over HTTP and WebSocket on port 8000.
+2. A user must first log in or register. **Login Auth** verifies the credentials against the **BSL_SQLite database**.
+3. Once verified, the user can access the services inside `app.bzg` (the Bonezegei server):
+   - **Live relay**: `onData` to `sendAll` broadcasts chat packets to everyone.
+   - **Page Server**: `server.get` serves the login page, chat page and assets.
+   - **Accounts**: `SIGNUP` and `LOGIN` packets, backed by the user table (username, password).
+   - **Chat History**: `SAVE` and `HISTORY` packets, backed by the messages table (foreign keys to both user and channel, timestamp, text) and the channel table.
+   - **Picture**: `IMGH`, `IMGC` and `IMGGET` packets. Pictures are converted to Base64 for transfer and converted back to a photo when requested.
+
+### UI design (Figma)
+
+The interface was designed in Figma before it was built. The screenshot below shows the design file, with frames for the schematic diagram, the login page, the register page, the general chat and the voice chat lounge.
+
+![BISCORD Figma design file](docs/Figma_Design.png)
+
+### Project structure
 
 ```
 .
-├── start-server.bat     # Windows launcher: firewall rule, shows your IP, runs the server
-├── app.bzg              # The entire server: web page, live chat relay, accounts, saved chat
-├── database/
-│   ├── chatterbox.db    # SQLite database: users, channels, messages (created on first run)
-│   └── images/          # (no longer used: pictures are stored in chatterbox.db)
-├── package.json
+├── app.bzg                 # The whole server (HTTP routes, WebSocket, accounts, history, pictures)
+├── start-server.bat        # Windows launcher (checks setup, opens firewall, shows LAN URLs, auto-restarts)
+├── package.json            # Project metadata and `npm start` script
 ├── lib/
-│   ├── http.bzg         # Loads the native http module
-│   ├── http.json        # Method reference for the http module
-│   ├── http/http.dll    # Native HTTP/WebSocket library
-│   ├── sqlite.bzg       # Loads the native SQLite module (BSL_SQLite)
+│   ├── http.bzg            # Loads the http/socket native library (http/http.dll)
+│   ├── http.json           # API description of the http/socket library
+│   ├── sqlite.bzg          # Loads the SQLite native library (sqlite/sqlite.dll)
+│   ├── http/http.dll
 │   └── sqlite/sqlite.dll
-├── public/
-│   ├── login.html       # Login / sign up page (served at /)
-│   ├── chat.html        # Main chat page (served at /chat)
-│   ├── scripts/
-│   │   ├── common.js    # Shared by both pages: connection address, login note, console
-│   │   ├── login.js     # Login page logic
-│   │   └── chat.js      # Chat page logic
-│   ├── style.css        # Cartoon-style theme
-│   └── 404.html
-└── README.md
+├── docs/
+│   ├── Schematic_Diagram.jpg   # Architecture diagram used in this README
+│   └── Figma_Design.png        # Screenshot of the Figma UI design file
+├── public/                 # Files served to the browser
+│   ├── login.html          # Login / sign-up page
+│   ├── chat.html           # Chat page
+│   ├── 404.html            # Page shown for unknown URLs
+│   ├── style.css
+│   └── scripts/
+│       ├── common.js       # Shared WebSocket and packet helpers
+│       ├── login.js
+│       └── chat.js
+└── database/
+    ├── chatterbox.db       # SQLite database (users, channels, messages, pictures)
+    └── images/
 ```
 
-## Requirements
+---
 
-- Windows (the native module is a `.dll`)
-- The **Bonezegei** interpreter, available as `bonezegei` (tested with v1.3.3)
+## 2. Installation & Setup Guide
+
+### Requirements
+
+- **Windows** (the bundled libraries are `.dll` files and the launcher is a `.bat` file)
+- The **BSL interpreter** (`bonezegei` command)
+- The **Socket (HTTP/WebSocket) library** and the **SQLite library**, both bundled in `lib/`
 - A modern web browser
 
-## Getting Started
+### Step 1: Install BSL
 
-One program does everything (`start-server.bat` runs it for you):
+1. Obtain the BSL (Bonezegei) interpreter package from your course or instructor materials.
+2. Install it and add it to your system **PATH**.
+3. Open a new Command Prompt and check that the command is found:
 
-```bash
-bonezegei app.bzg          # page + live chat + accounts + saved chat   (npm start)
+   ```bat
+   where bonezegei
+   ```
+
+   If it prints a path, BSL is installed correctly. If it says it could not find `bonezegei`, the interpreter is not on your PATH yet.
+
+### Step 2: Get the project
+
+Download or clone the repository, then open a terminal inside the project folder (the one containing `app.bzg`).
+
+```bat
+cd path\to\BISCORD
 ```
 
-Open <http://localhost:8000>, create an account on the **Sign up** tab and start chatting. Open a second tab or device on the same network (use the host machine's IP instead of `localhost`) to chat with yourself.
+### Step 3: Install the socket library (and SQLite)
 
-## Accounts and saved chat
+Both libraries are already included in `lib/`, so there is nothing to download. They are loaded by the server's first lines:
 
-Accounts and history use the **same WebSocket as the chat**, so only port **8000** is involved. They are extra packet types that `app.bzg` answers to the sender only (they are never broadcast):
+```js
+include("lib/http.bzg");     // socket / HTTP + WebSocket library
+include("lib/sqlite.bzg");   // SQLite library
+var server = http(8000);     // start listening on port 8000
+```
 
-| Client sends | Server answers | What it does |
-| ------------ | -------------- | ------------ |
-| `SIGNUP\|id\|username\|password` | `AUTHOK` or `AUTHERR` | Checks the name (2–16 characters, not taken, case-insensitive) and a password was given, then creates the account and logs the tab in |
-| `LOGIN\|id\|username\|password` | `AUTHOK` or `AUTHERR` | Checks username and password |
-| `HISTORY\|id\|\|` | `HIST` per message, then `HISTEND` | Returns the saved messages (last `HISTORY_PER_CHANNEL` per channel) |
-| `USERS\|id\|\|` | `USER` per account, then `USEREND` | Returns every registered username, for the members panel. The page asks after joining, after reconnecting, and when it meets a name it doesn't know yet (someone who just signed up) |
-| `SAVE\|id\|channel\|timestamp\|text` | `SAVEERR` only if not logged in | Saves one message. The browser sends it every time you send a message |
+Each `.bzg` file loads its native DLL:
 
-The server remembers which tab (`id`) logged in, so `SAVE` and `HISTORY` only work after a login.
-
-**Where the data lives.** Everything is stored in one SQLite file, `database/chatterbox.db` (the `database/` folder must exist), using the [BSL_SQLite](https://github.com/bonezegei/BSL_SQLite) module. Tables:
-
-| Table | Columns |
+| File | Loads |
 | --- | --- |
-| `users` | `id`, `username` (unique, case-insensitive), `password`, `created_at` (Unix seconds) |
-| `channels` | `id`, `name` (one row per entry in `CHANNELS`, added on start) |
-| `messages` | `id`, `channel_id` -> `channels`, `user_id` -> `users`, `ts` (ms, from the sender's browser), `text` |
+| `lib/http.bzg` | `http/http.dll` (Socket library v1.0.1: GET/POST routes and WebSocket send/receive) |
+| `lib/sqlite.bzg` | `sqlite/sqlite.dll` (SQLite database access) |
 
-On login the server sends the newest `HISTORY_PER_CHANNEL` messages of each channel. BSL_SQLite has no bound parameters, so `app.bzg` escapes all text with `sqlStr()` before putting it in SQL; keep doing that if you add queries.
+Make sure the `lib/` folder keeps its structure (`lib/http/http.dll` and `lib/sqlite/sqlite.dll`), because the `.bzg` files refer to these relative paths.
 
-**This is a personal project, so there is no security:** passwords are saved as plain text and the login is tied to the browser tab's random id.
+> The `database/` folder must exist next to `app.bzg`. It already contains `chatterbox.db`; the tables are created automatically on startup if they are missing. Uploaded pictures are stored inside the database.
 
-**What is saved:** text messages and pictures. Join/leave notices and typing dots are live only. Each picture is saved in the `pictures` table of `chatterbox.db` (one row per 1500-character packet, base64) and referenced from the `messages` table as the text `[img]picId,mime,bytes,width,height`. After you log in, saved pictures are downloaded one by one as they scroll into view (`IMGGET` request, `PICH`/`PICC` packets back to you only). Timestamps come from the sender's browser.
+### Step 4: Run the server
 
-**Settings** (top of `app.bzg`): `CHANNELS`, `MAX_TEXT`, `HISTORY_PER_CHANNEL`, `DB_FILE`. If you add a channel in `public/scripts/chat.js`, add it to `CHANNELS` there too.
+**Option A: Windows launcher (recommended)**
 
-## How It Works
+Double-click `start-server.bat`, or run it from the terminal:
 
-**Two pages.** `/` is the login / sign up page (`login.html`) and `/chat` is the chat (`chat.html`). After a successful login the login page saves your tab id and name in the browser tab (`sessionStorage`) and opens `/chat`. The chat page opens its own WebSocket and sends `RESUME|id||`; the server answers `AUTHOK` with your username if that login is known, or `AUTHERR`, which sends you back to the login page. Logging out sends `LOGOUT|id||`, clears the note and returns to the login page. Refreshing the chat page keeps you logged in; closing the tab does not.
-
-**Join popups.** When a `HELLO` arrives from someone else, `showJoinToast()` in `public/scripts/chat.js` adds a popup to `#joinToasts` (bottom right, stacked above the connection popup if both are showing). Each stays `JOIN_TOAST_MS` (4 seconds) and at most `MAX_JOIN_TOASTS` (4) show at once. You don't get a popup for your own join.
-
-**Members panel.** The browser knows who is online from the live chat (`peers`) and who has an account from the server (`registered`, filled by `USERS`). `renderUsers()` merges them: online = `.member.active` (green), registered but not online = `.member.inactive` (greyscale, see `style.css`).
-
-**Connection popup.** If the connection to the server drops, a small popup appears in the bottom right corner with a spinner and "Connection lost. Trying to reconnect...". It stays (without repeating) while the page keeps retrying, then changes to "Reconnected" and slides away. It is hidden the rest of the time.
-
-The Bonezegei server is a **plain relay**: whatever one client sends, it broadcasts to every connected client. It stores nothing and parses nothing. Live chat logic lives in `public/scripts/chat.js`; accounts and saved messages are handled inside `app.bzg`, using packets that are answered to one client instead of being broadcast.
-
-The live chat part is a relay on purpose. An earlier version kept the username list on the server in a BSL array, and it misbehaved (messages were treated as new usernames, and the server stalled when two people joined together). The relay design only uses `sendAll`, which is the same thing the original lab server did.
-
-### Message format
-
-Every message is plain text shaped like `TYPE|id|name|payload`. Each browser tab has a random `id`.
-
-| Type | Sent when | Meaning |
-| ---- | --------- | ------- |
-| `CLAIM` | You press Join | "I'd like this username" |
-| `TAKEN` | Someone already has that name | Tells the claimer to pick another. If two people claim the same name at once, the lower `id` wins |
-| `HELLO` | Your claim wasn't challenged for 0.7 seconds | You joined. Everyone replies with `HERE` so you learn who is online |
-| `HERE` | Replying to `HELLO`, and every 20 seconds | "I'm online" |
-| `MSG` | You send a message | Payload is `channel\|text`, for example `random\|hello` |
-| `TYPING` | You type in the message box | Payload is `channel\|1` while typing (repeated every 2.5 seconds), `channel\|0` when you stop, clear the box or switch channel. Sending a message also hides your dots. Receivers hide them after 5 seconds of silence. These packets are left out of the Console to avoid flooding it |
-| `IMGH` | You send a picture | Header: `channel\|picId\|packets\|mime\|bytes\|width\|height`. Receivers show the placeholder |
-| `IMGC` | Right after `IMGH` | One piece of the picture: `picId\|index\|base64data`. These are left out of the Console |
-| `BYE` | You close the tab | You left. Clients also drop anyone silent for 2.5 minutes |
-
-If a message arrives without a known channel in front (for example from an older copy of the page), it is shown in `#general`.
-
-## Pictures
-
-**Sending.** The picture is shrunk to at most 1024 pixels on its longest side and compressed to JPEG under about 160 KB (a typical photo ends up at 50–150 KB). Small GIFs under 160 KB are sent unchanged so they keep moving. The result is cut into packets of 1,500 characters and sent with a short pause every few packets, so the server isn't flooded.
-
-**Receiving.** The header packet creates a placeholder with a striped loading animation and a progress bar ("Receiving 45%"). When the last packet arrives the picture is rebuilt, decoded, and shown. If nothing arrives for 15 seconds, the placeholder turns pink ("Picture didn't arrive").
-
-**Memory.** Browsers keep decoded pictures in memory, and that is the expensive part. Each picture is only decoded while it is on screen (or within about a screen of it). When it scrolls away, you switch channel, or the tab stays hidden for 5 seconds, the picture is released. Scrolling back shows the loading animation briefly and reloads it from the small compressed copy kept in the page. Past 40 MB of kept pictures, the oldest are dropped and show "Removed to save memory".
-
-**Settings** are the constants at the top of the script in `public/scripts/chat.js`: `MAX_DIM`, `MAX_IMG_BYTES`, `CHUNK_CHARS`, `MAX_STORE_BYTES`, `MIN_LOADING_MS`, `HIDDEN_UNLOAD_MS`.
-
-**Limits.**
-- Pictures are saved on the server, so they survive a refresh and people who join later see them. Only pictures sent while the server was running this version are saved.
-- Pictures are compressed, so quality is lower than the original. Transparent PNGs get a white background, and animated GIFs over 160 KB become still.
-- If pictures never show up on your server, it may not accept large packets. Lower `CHUNK_CHARS` to 800, then 400.
-
-## Server Handlers (`app.bzg`)
-
-| Handler | Behavior |
-| ------- | -------- |
-| `server.get` | `/` serves `public/login.html` (also `/login`), `/chat` serves `public/chat.html`, and `/style.css` and `/scripts/common.js`, `/scripts/login.js`, `/scripts/chat.js` their files, anything else serves `public/404.html` |
-| `server.onConnect` | Logs the connection |
-| `server.onData` | `SIGNUP`, `LOGIN`, `HISTORY` and `SAVE` are handled by the server and answered to the sender only. Everything else is broadcast to everyone with `sendAll` |
-| `server.onDisconnect` | Logs the disconnection |
-
-## Limitations
-
-- Because the server doesn't check anything, a person who edits the page's code could pretend to be someone else. That's fine for a lab or a class demo, but not for real use.
-- If someone's browser crashes (no `BYE`), their name stays in the list for up to 2.5 minutes.
-- Messages are never deleted, so `chatterbox.db` and `database/images/` only grow.
-- Messages sent by others while your connection was down are not filled in until you log in again.
-
-## Design
-
-Palette (defined as CSS variables at the top of `public/style.css`):
-
-| Role | Colors |
-| ---- | ------ |
-| Primary | Bubble Blue `#2D6BFF`, Sunny Yellow `#FFD23F` |
-| Secondary | Mint Green `#35D07F`, Bubblegum Pink `#FF6FA5`, Sky Cyan `#5CCBFF` |
-| Complementary | Orange `#FF8A2B` (opposite blue), Purple `#8B5CF6` (opposite yellow) |
-| Neutrals | Ink `#1B1230`, Paper `#FFF6DF`, White |
-
-Fonts are Lilita One (headings) and Nunito (text), loaded from Google Fonts. Offline, the page falls back to system rounded fonts.
-
-## Hosting on Your Local Network
-
-Other phones and laptops on the same Wi-Fi can join the chat through your PC's IP address.
-
-1. **Start the servers with `start-server.bat`** (double-click it). The first time, right-click it and choose **Run as administrator** so it can open the Windows Firewall for port 8000. After that, a normal double-click is enough.
-2. The window prints the addresses to share, for example `http://192.168.1.23:8000`. Use the one starting with `192.168` or `10.`.
-3. On the other device, connected to the **same Wi-Fi**, type that address into the browser.
-4. Pick different usernames and chat.
-
-Prefer the terminal? The manual steps are:
-
-```bash
-ipconfig                     # find your "IPv4 Address"
-bonezegei app.bzg            # start the server
+```bat
+start-server.bat
 ```
 
-and, once, in an **administrator** terminal:
+The launcher will:
 
-```bash
-netsh advfirewall firewall add rule name="BISCORD LAN TCP 8000" dir=in action=allow protocol=TCP localport=8000 profile=any
+1. Check that `bonezegei` and `app.bzg` are found.
+2. Create `database\images` if needed.
+3. Check for a Windows Firewall rule for port 8000.
+4. Print the addresses other devices can open, for example `http://192.168.1.20:8000`.
+5. Start the server and restart it automatically if it ever exits.
+
+> **First run, for LAN access:** right-click `start-server.bat` → **Run as administrator** once. This adds the firewall rule (`BISCORD LAN TCP 8000`) so phones and other laptops can connect. After that you can run it normally.
+
+**Option B: Run the script directly**
+
+```bat
+bonezegei app.bzg
 ```
 
-To remove the firewall rule later:
+or, if you have npm available:
 
-```bash
-netsh advfirewall firewall delete rule name="BISCORD LAN TCP 8000"
+```bat
+npm start
 ```
 
-When Windows asks whether to let `bonezegei` through the firewall, allow it.
+When the server starts correctly, the console prints something like:
 
-The page picks up the address it was opened from, so no code changes are needed for other devices.
+```
+Database ready: database/chatterbox.db (N user(s), N message(s))
+```
 
-## Sharing over the internet with ngrok
+If you see `ERROR: database ... is not working`, check that the `database` folder exists.
 
-Run `ngrok http 8000`. Everything (page, live chat, accounts) is on that one port, so a single tunnel carries it all. Open the `https://...ngrok...` address ngrok prints.
+Keep the console window open while people are chatting. Press **Ctrl+C** to stop the server.
 
-## Customization
+---
 
-- **Add or rename channels:** edit the `CHANNELS` list near the top of the script in `public/scripts/chat.js`. Every browser needs the same list. The server doesn't need to change.
+## 3. Usage Instructions
 
-- **Change the port:** edit `http(8000)` in `app.bzg`. The client uses the page's own host and port, so it follows automatically.
-- **Presence timing:** adjust `HEARTBEAT_MS` and `STALE_MS` at the top of the script in `public/scripts/chat.js`.
-- **Recolor the app:** edit the variables in `:root` in `public/style.css`.
+Replace `localhost` with the server's LAN IP (for example `192.168.1.20`) when opening the app from another device on the same Wi-Fi.
 
-## Troubleshooting
+### Page endpoints
 
-- **Console shows messages but the chat area stays empty:** open the Console and look at the `[Server]` lines. BISCORD messages look like `HELLO|...` or `Alice says: Hello`. If you see a `[System] Ignored a message...` line, the server is running an old `app.bzg`. Replace the one in the project root with the relay version and restart. The page also understands the original lab server's `User <n> says: ...` format, so chat still works with it.
+| URL | What you get |
+| --- | --- |
+| `http://localhost:8000/` | Login / sign-up page |
+| `http://localhost:8000/login` | Same login / sign-up page |
+| `http://localhost:8000/login.html` | Same login / sign-up page |
+| `http://localhost:8000/chat` | Chat page (redirects to the login page if you are not logged in) |
+| `http://localhost:8000/chat.html` | Same chat page |
+| `http://localhost:8000/anything-else` | 404 page ("404 - Page Not Found") |
 
-- **`Attempt to call method on non-object type` when the server runs:** `app.bzg` called a method on a string or array (such as `.indexOf`, `.length` or `.push`). BSL has none, see "Editing app.bzg" below. The line number it reports is often the end of the file, not the real spot.
-- **`Undefined variable <name>` when the server runs:** a function is called before it is defined. Move it above the code that calls it.
-- **`Array index -1 out of bounds`:** an index was used before being checked. `||` and `&&` do not short-circuit in BSL.
-- **Works on the PC but not on other devices:** open the page on the PC using your IP address (not `localhost`). If that works but other devices fail, it's the firewall (run the `.bat` as administrator once) or the Wi-Fi. Guest networks and some routers block devices from talking to each other ("client isolation" or "AP isolation").
-- **Phone is on mobile data:** turn mobile data off so it uses the same Wi-Fi as the PC.
-- **Wrong IP:** VPNs, WSL and VirtualBox add extra addresses. Use the one that starts with `192.168` or `10.`.
+### Static asset endpoints
 
-- **Status shows Offline:** make sure the server is running. The client retries every 2 seconds.
-- **"The server didn't answer" at log in:** the page is open but `app.bzg` isn't answering (or is an older copy without the account packets). Restart it with the current `app.bzg`.
-- **"That account is already online":** that login is open in another tab or device. Wait a few minutes if it was a crashed tab.
-- **Port already in use:** close the other program or change the port.
+These are loaded automatically by the pages, but you can open them in the browser to check they are being served:
 
-## Editing app.bzg: Bonezegei rules learned the hard way
+| URL | File |
+| --- | --- |
+| `http://localhost:8000/style.css` | Stylesheet |
+| `http://localhost:8000/scripts/common.js` | Shared WebSocket helpers |
+| `http://localhost:8000/scripts/login.js` | Login page script |
+| `http://localhost:8000/scripts/chat.js` | Chat page script |
 
-Bonezegei looks like JavaScript but is much smaller. These rules were verified against interpreter v1.3.3:
+### WebSocket endpoint
 
-- **Strings and arrays have no methods.** Use `sizeof(x)` for length, `substr(s, start, len)` for slices, `s[i]` for one character, and `arr[sizeof(arr)] = value` to append. There is no `indexOf`, `split`, `toLowerCase`, `push` or `shift`; `app.bzg` has its own `indexOfChar()` and `lower()` helpers. Arrays cannot shrink.
-- **Define functions before using them.** A function can only call functions defined above it in the file.
-- **No short-circuit evaluation.** `a || b` and `a && b` evaluate both sides, so guard an index with a separate `if` first.
-- **Strings cannot be compared with `<` or `>`**, only `==` and `!=`.
-- `null` prints as `0`, `readFile` of a missing file returns an empty string, and `%` is the modulo operator.
+The chat page connects to `ws://<host>:8000`. Accounts, history, pictures and live chat all travel over this one connection, so no other ports or REST endpoints are required.
+
+### Walkthrough
+
+1. **Open the app** at `http://localhost:8000/`.
+2. **Sign up**: choose a username (2–16 characters) and a password, then submit. Next time, use **Log in**.
+3. **Chat**: you land on `#general`. Pick another channel (`#random`, `#help`, `#memes`) from the left sidebar.
+4. **Send a message**: type in the box at the bottom and press **Enter** or click **Send** (max 300 characters).
+5. **Send a picture**: click the attach button, or drag and drop an image onto the chat. Pictures are resized and compressed automatically.
+6. **See who is around**: the members panel on the right shows online users and the total number of registered accounts. A "typing" indicator appears when someone is writing.
+7. **Debug**: expand the connection console at the bottom to watch packets going back and forth.
+8. **Log out** with the log-out button in the sidebar.
+
+To test live chat, open the app in two different browsers (or one normal and one private window) and log in with two different accounts.
+
+### Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `"bonezegei" was not found on this PC` | Install BSL and add it to PATH, then open a new terminal. |
+| Other devices cannot connect | Run `start-server.bat` as administrator once, and make sure all devices are on the same Wi-Fi. |
+| Blank chat or "session ended" message | Make sure the server is running the latest `app.bzg`, then log in again. |
+| `ERROR: database ... is not working` | Confirm the `database/` folder exists next to `app.bzg`. |
+| Port 8000 already in use | Close the other program using it, or change the `http(8000)` value in `app.bzg` (and `PORT` in `start-server.bat`). |
+
+---
+
+## Notes & Limitations
+
+- This is a personal / learning project: **passwords are stored as plain text** and there is no real security. Do not reuse a real password.
+- Messages are limited to 300 characters; pictures are compressed to roughly 160 KB before sending.
+- The channel list is defined in `app.bzg` (`CHANNELS`) and must be kept in sync with the client.
 
 ## License
 
