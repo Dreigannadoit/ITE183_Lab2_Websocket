@@ -74,7 +74,7 @@ var server = http(8000);
 // SETTINGS
 // ------------------------------------------
 var CHANNELS = ["general", "random", "help", "memes"];   // keep in sync with public/app.js
-var MAX_TEXT = 300;               // same limit as the message box
+var MAX_TEXT = 1000;               // same limit as the message box
 var HISTORY_PER_CHANNEL = 100;    // how many past messages a person gets on login
 
 // Database (SQLite, through the BSL_SQLite module in lib/sqlite.bzg).
@@ -887,7 +887,7 @@ function doDelete(clientId, id, payload) {
 // Anybody logged in can READ any profile. Only the owner can CHANGE theirs: every change
 // packet must carry the login secret, and the server only ever writes to the row of the
 // logged-in user (never to a name taken from the packet).
-var PROF_THOUGHT_MAX = 300;     // limits on the URL-ENCODED text (the browser limits the plain text more tightly)
+var PROF_THOUGHT_MAX = 1000;     // limits on the URL-ENCODED text (the browser limits the plain text more tightly)
 var PROF_BIO_MAX = 900;
 var PROF_LINKS_MAX = 1400;
 var PROF_PIECE_MAX = 2000;      // characters in one piece of picture data

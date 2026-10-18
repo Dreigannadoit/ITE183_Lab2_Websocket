@@ -388,6 +388,11 @@ body {
 .msg.mine .bubble { border-radius: 18px 18px 6px 18px; }
 .msg.mine .gutter time { right: auto; left: 0; }
 .msg.mine.mention { box-shadow: inset -5px 0 0 var(--orange); }
+/* Your own messages hug the right edge and never stretch across the whole chat: past this width the text wraps. */
+.msg.mine .content > .bwrap, .msg.mine .content > .bubble { max-width: 72%; }
+@media (max-width: 600px) {
+    .msg.mine .content > .bwrap, .msg.mine .content > .bubble { max-width: 88%; }
+}
 
 .mention-tag { padding: 0 6px 1px; font-weight: 800; color: var(--ink); background: var(--sky); border: 2px solid var(--ink); border-radius: 8px; }
 .mention-tag.me { background: var(--yellow); }

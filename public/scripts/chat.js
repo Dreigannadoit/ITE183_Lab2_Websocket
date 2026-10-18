@@ -910,7 +910,7 @@ function startEdit(item, bar) {
     const input = document.createElement("input");
     input.className = "field edit-input";
     input.type = "text";
-    input.maxLength = 300;
+    input.maxLength = 1000;
     input.value = item.text;
     input.setAttribute("aria-label", "Edit your message");
     const save = document.createElement("button");

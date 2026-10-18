@@ -12,7 +12,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 
 - **Accounts**: sign up and log in with a username (2–16 characters, case-insensitive and unique) and a password.
 - **Four channels**: `#general`, `#random`, `#help` and `#memes`.
-- **Live messaging**: messages are broadcast to everyone through the WebSocket server (limit: 300 characters per message).
+- **Live messaging**: messages are broadcast to everyone through the WebSocket server (limit: 1000 characters per message).
 - **Edit and delete your own messages**: hover over one of your messages (or look under it on a phone) to edit it or delete it. Edited messages show an "(edited)" note. Nobody else can edit or delete your messages: the server enforces it (see below).
 - **Chat history**: messages are saved in SQLite. The newest 100 messages per channel are loaded after login or a server restart.
 - **Picture sharing**: attach or drag-and-drop images (JPEG, PNG, GIF, WebP). They are compressed in the browser, sent in chunks, saved in the database and reloaded when they scroll into view.
@@ -253,7 +253,7 @@ The chat page connects to `ws://<host>:8000`. Accounts, history, pictures and li
 1. **Open the app** at `http://localhost:8000/`.
 2. **Sign up**: choose a username (2–16 characters) and a password, then submit. Next time, use **Log in**.
 3. **Chat**: you land on `#general`. Pick another channel (`#random`, `#help`, `#memes`) from the left sidebar.
-4. **Send a message**: type in the box at the bottom and press **Enter** or click **Send** (max 300 characters).
+4. **Send a message**: type in the box at the bottom and press **Enter** or click **Send** (max 1000 characters).
 5. **Edit or delete a message**: hover over one of your own messages and click the pencil to edit it (Enter saves, Esc cancels) or the bin to delete it (you are asked to confirm). Both changes appear instantly for everyone in the channel. Other people's messages have no buttons.
 6. **Send a picture**: click the attach button, or drag and drop an image onto the chat. Pictures are resized and compressed automatically.
 7. **See who is around**: the members panel on the right shows online users and the total number of registered accounts. A "typing" indicator appears when someone is writing.
@@ -279,7 +279,7 @@ To test live chat, open the app in two different browsers (or one normal and one
 
 - This is a personal / learning project: **passwords are stored as plain text** and there is no real security. Do not reuse a real password.
 - Edited messages keep their original time and show "(edited)". There is no edit history.
-- Messages are limited to 300 characters; pictures are compressed to roughly 160 KB before sending.
+- Messages are limited to 1000 characters; pictures are compressed to roughly 160 KB before sending.
 - The channel list is defined in `app.bzg` (`CHANNELS`) and must be kept in sync with the client.
 
 ## License
