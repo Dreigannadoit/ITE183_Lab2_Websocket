@@ -1932,7 +1932,7 @@ function resetCardFx() {
     clearTimeout(profSwapTimer);
     clearTimeout(profIntroTimer);
     profSwapping = false;
-    profileCard.classList.remove("is-in", "is-swap-out", "is-resizing", "is-jelly");
+    profileCard.classList.remove("is-in", "is-swap-out", "is-resizing");
     profileCard.style.height = "";
     profileCard.style.transition = "";
 }
@@ -1951,7 +1951,7 @@ function swapProfile(change, dir, after) {
     profSwapping = true;
     const h0 = profileCard.offsetHeight;
     profileCard.style.height = h0 + "px";
-    profileCard.classList.remove("is-in", "is-jelly");
+    profileCard.classList.remove("is-in");
     profileCard.style.setProperty("--dx", dir);
     profileCard.classList.add("is-resizing", "is-swap-out");
     profSwapTimer = setTimeout(() => {
@@ -1966,10 +1966,17 @@ function swapProfile(change, dir, after) {
         void profileCard.offsetHeight;                // commit the old height, then glide to the new one
         profileCard.style.transition = "";
         profileCard.style.height = h1 + "px";
-        profileCard.classList.add("is-jelly");
+        // a little wobble as the card settles. Done with the Web Animations API on purpose: switching the card's CSS
+        // animation (and back) would make its opening animation play again.
+        profileCard.animate([
+            { transform: "scale(1)" },
+            { transform: "scale(1.02, .985)", offset: .3 },
+            { transform: "scale(.992, 1.008)", offset: .55 },
+            { transform: "scale(1)" }
+        ], { duration: 600, easing: "ease-out" });
         if (after) after();
         profSwapTimer = setTimeout(() => {
-            profileCard.classList.remove("is-resizing", "is-jelly");
+            profileCard.classList.remove("is-resizing");
             profileCard.style.height = "";
             profSwapping = false;
         }, 650);

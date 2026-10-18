@@ -912,6 +912,7 @@ body {
     position: relative;
     width: min(518px, 100%);
     max-height: 94dvh;
+    overflow-x: hidden;
     overflow-y: auto;
     font-family: var(--prof-text);
     font-weight: 400;
@@ -1190,7 +1191,6 @@ body {
 .prof-card.is-resizing { overflow: hidden; transition: height .6s cubic-bezier(.3, 1.2, .4, 1); }
 .prof-card.is-swap-out { pointer-events: none; }
 .prof-card.is-swap-out .stg:not(.prof-banner):not(.prof-avatar-wrap) { animation: prof-swap-out .22s ease-in both; animation-delay: calc(var(--i, 0) * 9ms); }
-.prof-modal:not([hidden]) .prof-card.is-jelly { animation: prof-jelly .6s ease-out; }
 
 /* --- closing --- */
 .prof-modal.is-closing { animation: prof-backdrop-out .4s ease-in both; pointer-events: none; }
@@ -1259,12 +1259,6 @@ body {
 }
 @keyframes prof-btn-in {
     from { opacity: 0; transform: translateY(26px) scale(.8) rotate(-3deg); }
-}
-@keyframes prof-jelly {
-    0% { transform: scale(1); }
-    30% { transform: scale(1.02, .985); }
-    55% { transform: scale(.992, 1.008); }
-    100% { transform: scale(1); }
 }
 @keyframes prof-shake {
     0% { opacity: 0; transform: translateY(-6px); }
