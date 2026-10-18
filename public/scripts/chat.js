@@ -650,6 +650,7 @@ function switchChannel(ch) {
     drafts[current] = msgInput.value;   // keep what was typed, per channel
     current = ch;
     msgInput.value = drafts[ch] || "";
+    closeMentions();
     store[ch].unread = 0;
     store[ch].mentions = 0;
     updateBadges();
@@ -1706,6 +1707,7 @@ function saveMessage(ch, text, mid) {
 
 $("chatForm").addEventListener("submit", (e) => {
     e.preventDefault();
+    closeMentions();
     const text = msgInput.value.trim();
     if (!text || !joined) return;
     const mid = newMsgId();
@@ -1716,6 +1718,139 @@ $("chatForm").addEventListener("submit", (e) => {
         cancelTyping();
     }
     msgInput.focus();
+});
+
+// ---------- @mention suggestions ----------
+// Typing "@" in the message box opens a list of everybody with an account (online first, then offline).
+// Keep typing and the list narrows to the names that match: names that START with what you typed come
+// first, then names that contain it. Up / Down move, Enter or Tab insert the name, Esc closes the list.
+const mentionList = $("mentionList");
+const MENTION_MAX = 50;
+let mentionMatches = [];     // [{ name, online }]
+let mentionIndex = 0;
+let mentionQueryText = null; // what was typed after the "@" the last time the list was drawn
+
+// The "@word" the caret is at the end of: { start (position of the @), text } or null.
+function mentionQuery() {
+    if (msgInput.selectionStart !== msgInput.selectionEnd) return null;
+    const caret = msgInput.selectionStart;
+    const m = /(^|\s)@([^\s@]*)$/.exec(msgInput.value.slice(0, caret));
+    return m ? { start: caret - m[2].length - 1, text: m[2] } : null;
+}
+
+function mentionCandidates(text) {
+    const all = new Map();   // lower-case name -> { name, online }
+    registered.forEach((n, key) => all.set(key, { name: n, online: false }));
+    peers.forEach((p) => all.set(p.name.toLowerCase(), { name: p.name, online: true }));
+    all.delete(myName.toLowerCase());                  // no point mentioning yourself
+    const needle = text.toLowerCase();
+    const starts = [], inside = [];
+    all.forEach((u, key) => {
+        const at = key.indexOf(needle);
+        if (at === 0) starts.push(u); else if (at > 0) inside.push(u);
+    });
+    const order = (a, b) => (b.online - a.online) || a.name.localeCompare(b.name);
+    return starts.sort(order).concat(inside.sort(order)).slice(0, MENTION_MAX);
+}
+
+function closeMentions() {
+    mentionList.hidden = true;
+    mentionList.replaceChildren();
+    mentionMatches = [];
+    mentionQueryText = null;
+    msgInput.setAttribute("aria-expanded", "false");
+    msgInput.removeAttribute("aria-activedescendant");
+}
+
+function paintMentionSelection() {
+    Array.from(mentionList.children).forEach((li, i) => {
+        const on = i === mentionIndex;
+        li.setAttribute("aria-selected", String(on));
+        if (on) {
+            msgInput.setAttribute("aria-activedescendant", li.id);
+            li.scrollIntoView({ block: "nearest" });
+        }
+    });
+}
+
+// Name with the part you typed highlighted.
+function mentionLabel(name, text) {
+    const nm = mk("span", "nm");
+    const at = text ? name.toLowerCase().indexOf(text.toLowerCase()) : -1;
+    if (at < 0) { nm.textContent = name; return nm; }
+    nm.append(name.slice(0, at), mk("b", "", name.slice(at, at + text.length)), name.slice(at + text.length));
+    return nm;
+}
+
+function updateMentions() {
+    const q = mentionQuery();
+    if (!q || msgInput.disabled) { closeMentions(); return; }
+    if (q.text !== mentionQueryText) mentionIndex = 0;    // a new search starts at the top
+    mentionQueryText = q.text;
+    mentionMatches = mentionCandidates(q.text);
+    if (mentionIndex >= mentionMatches.length) mentionIndex = 0;
+
+    mentionList.replaceChildren();
+    if (!mentionMatches.length) {
+        const li = mk("li", "mention-empty", q.text ? "Nobody matches @" + q.text : "Nobody to mention yet");
+        li.setAttribute("role", "presentation");
+        mentionList.append(li);
+    }
+    mentionMatches.forEach((u, i) => {
+        const li = mk("li", "mention-item " + (u.online ? "online" : "offline"));
+        li.id = "mention-" + i;
+        li.setAttribute("role", "option");
+        li.append(makeAvatar(u.name), mentionLabel(u.name, q.text));
+        const st = mk("span", "st");
+        st.append(mk("i"), document.createTextNode(u.online ? "online" : "offline"));
+        li.append(st);
+        // mousedown (not click) so the message box keeps focus and its caret
+        li.addEventListener("mousedown", (e) => { e.preventDefault(); pickMention(i); });
+        li.addEventListener("mousemove", () => { if (mentionIndex !== i) { mentionIndex = i; paintMentionSelection(); } });
+        mentionList.append(li);
+    });
+    mentionList.hidden = false;
+    msgInput.setAttribute("aria-expanded", "true");
+    paintMentionSelection();
+}
+
+function pickMention(i) {
+    const u = mentionMatches[i];
+    const q = mentionQuery();
+    if (!u || !q) { closeMentions(); return; }
+    const caret = msgInput.selectionStart;
+    const insert = "@" + u.name + " ";
+    const v = msgInput.value;
+    msgInput.value = v.slice(0, q.start) + insert + v.slice(caret);
+    const pos = q.start + insert.length;
+    msgInput.setSelectionRange(pos, pos);
+    closeMentions();
+    msgInput.focus();
+    msgInput.dispatchEvent(new Event("input", { bubbles: true }));   // keeps the "is typing" signal going
+}
+
+msgInput.addEventListener("input", updateMentions);
+msgInput.addEventListener("click", updateMentions);
+msgInput.addEventListener("blur", closeMentions);
+msgInput.addEventListener("keyup", (e) => {
+    // moving the caret with the arrow keys can enter or leave an "@word"
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(e.key) >= 0) updateMentions();
+});
+msgInput.addEventListener("keydown", (e) => {
+    if (mentionList.hidden) return;
+    const n = mentionMatches.length;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMentions();
+    } else if (n && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        mentionIndex = (mentionIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        paintMentionSelection();
+    } else if (n && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();                 // Enter picks the name instead of sending the message
+        pickMention(mentionIndex);
+    }
 });
 
 // ---------- profiles ----------
