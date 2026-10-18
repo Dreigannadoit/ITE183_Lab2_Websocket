@@ -1522,10 +1522,16 @@ function renderUsers() {
             btn.title = "View " + r.name + "'s profile" + (active ? "" : " (offline)");
         }
         btn.setAttribute("aria-haspopup", "dialog");
-        btn.addEventListener("click", () => { closeDrawers(); openProfile(r.name); });
+        btn.dataset.name = r.name;
+        btn.addEventListener("click", () => { hideThought(); closeDrawers(); openProfile(r.name); });
+        btn.addEventListener("pointerenter", (e) => { if (e.pointerType !== "touch") showThought(btn); });
+        btn.addEventListener("pointerleave", () => hideThought(btn));
+        btn.addEventListener("focus", () => { if (btn.matches(":focus-visible")) showThought(btn); });
+        btn.addEventListener("blur", () => hideThought(btn));
         li.append(btn);
         usersEl.appendChild(li);
     });
+    restoreThought();
 }
 
 // ---------- drawers (small screens) ----------
@@ -2078,6 +2084,95 @@ function rescanAvatars() {
     document.querySelectorAll(".avatar[data-name]").forEach((el) => wantAvatarPhoto(el.dataset.name));
 }
 
+// ----- thought bubble on hover (members panel) -----
+// One floating bubble shared by every member. It lives outside the panel (the panel scrolls and would clip it),
+// sits just left of the hovered member and uses the profile's thought text. The profile is fetched the first time
+// someone hovers; the bubble pops up as soon as it arrives.
+const thoughtTip = $("thoughtTip");
+const THOUGHT_GAP = 48;          // room for the two little bubbles between the big one and the member
+let thoughtBtn = null;           // the member button being hovered (null = none)
+let thoughtFor = null;           // the member button the visible bubble is currently showing
+
+function placeThought() {
+    if (!thoughtBtn || !thoughtBtn.isConnected) return;
+    const r = thoughtBtn.getBoundingClientRect();
+    thoughtTip.style.maxWidth = Math.max(120, Math.min(260, r.left - THOUGHT_GAP - 12)) + "px";
+    const w = thoughtTip.offsetWidth, h = thoughtTip.offsetHeight;
+    const left = Math.max(8, r.left - THOUGHT_GAP - w);
+    const top = Math.min(Math.max(8, r.top + r.height / 2 - h / 2), window.innerHeight - h - 8);
+    thoughtTip.style.left = left + "px";
+    thoughtTip.style.top = top + "px";
+    // keep the two little bubbles lined up with the member even when the box was nudged to stay on screen
+    const mid = Math.min(Math.max(14, r.top + r.height / 2 - top), h - 14);
+    thoughtTip.style.setProperty("--tail-y", mid + "px");
+}
+
+function showThought(btn) {
+    thoughtBtn = btn;
+    const p = profiles.get((btn.dataset.name || "").toLowerCase());
+    if (!p || !p.loaded) { wantAvatarPhoto(btn.dataset.name || ""); }   // fetch it; paintThought() runs on arrival
+    paintThought();
+}
+
+// Restarts the pop-in from the very first frame, whatever state the bubble was in
+// (hidden, fading out, or already showing another member's thought).
+function revealThought() {
+    thoughtTip.classList.remove("show", "leaving");
+    void thoughtTip.offsetWidth;                   // flush styles so the animations start over
+    thoughtTip.classList.add("show");
+}
+
+function leaveThought() {
+    if (!thoughtTip.classList.contains("show")) return;
+    thoughtTip.classList.remove("show");
+    thoughtTip.classList.add("leaving");
+}
+
+function paintThought() {
+    if (!thoughtBtn || !thoughtBtn.isConnected) { hideThought(); return; }
+    const p = profiles.get((thoughtBtn.dataset.name || "").toLowerCase());
+    const text = p && p.loaded ? p.thought : "";
+    if (!text) {                                   // not loaded yet, or nothing to say: no bubble
+        leaveThought();
+        thoughtFor = null;
+        thoughtTip.setAttribute("aria-hidden", "true");
+        thoughtBtn.removeAttribute("aria-describedby");
+        return;
+    }
+    thoughtTip.textContent = text;
+    placeThought();
+    // pop in whenever the bubble was hidden or now belongs to a different member;
+    // a mere text update for the same member (they edited their thought) just swaps the text
+    if (thoughtFor !== thoughtBtn || !thoughtTip.classList.contains("show")) revealThought();
+    thoughtFor = thoughtBtn;
+    thoughtTip.setAttribute("aria-hidden", "false");
+    thoughtBtn.setAttribute("aria-describedby", "thoughtTip");
+}
+
+function hideThought(btn) {
+    if (btn && btn !== thoughtBtn) return;         // a stale leave event from a member we already left
+    if (thoughtBtn) thoughtBtn.removeAttribute("aria-describedby");
+    thoughtBtn = null;
+    thoughtFor = null;
+    leaveThought();
+    thoughtTip.setAttribute("aria-hidden", "true");
+}
+
+// the member list is rebuilt now and then (someone joins); keep the bubble if the pointer is still on that member
+function restoreThought() {
+    if (!thoughtBtn) return;
+    const name = (thoughtBtn.dataset.name || "").toLowerCase();
+    const next = Array.from(usersEl.querySelectorAll(".member")).find((b) => (b.dataset.name || "").toLowerCase() === name);
+    if (next && (next.matches(":hover") || next.matches(":focus-visible"))) {
+        if (thoughtFor === thoughtBtn) thoughtFor = next;      // same person: don't replay the pop
+        thoughtBtn = next;
+        paintThought();
+    } else hideThought();
+}
+
+panel.addEventListener("scroll", () => hideThought(), { passive: true });
+window.addEventListener("resize", () => hideThought());
+
 // ----- opening and closing -----
 function openProfile(name) {
     if (profClosing) finishClose();               // reopened while the old card was still leaving
@@ -2179,6 +2274,7 @@ function onProfile(m) {
         }
     });
     if (profOpen === key && !profEditing) renderProfile();
+    if (thoughtBtn && (thoughtBtn.dataset.name || "").toLowerCase() === key) paintThought();
 }
 
 function onProfileMissing(name) {

@@ -1348,3 +1348,70 @@ body {
 .mention-item.offline .avatar { filter: grayscale(1); opacity: .8; }
 .mention-item[aria-selected="true"] { background: var(--sky); border-color: var(--ink); }
 .mention-empty { padding: 8px 12px; font-weight: 700; color: #5b5273; }
+
+/* ---------- thought bubble: floats left of a member while you hover it ---------- */
+/* Keyframe animations (not transitions): chat.js restarts them on every reveal, so the pop always plays. */
+.thought-tip {
+    --tail-y: 50%;
+    position: fixed;
+    z-index: 100000;                   /* above the drawers, popups, lightbox and the profile card */
+    left: 0;
+    top: 0;
+    width: max-content;
+    max-width: 260px;
+    padding: 8px 14px 10px;
+    font-family: var(--body);
+    font-weight: 800;
+    font-size: 15px;
+    line-height: 1.35;
+    text-align: left;
+    color: var(--ink);
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    box-shadow: 5px 5px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .08);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    pointer-events: none;              /* never steals the hover from the member */
+    opacity: 0;
+    visibility: hidden;
+    transform-origin: 100% var(--tail-y);
+}
+.thought-tip.show {
+    visibility: visible;
+    opacity: 1;
+    animation: thought-fade .14s ease-out both, thought-pop .45s cubic-bezier(.2, 1.7, .4, 1) both;
+}
+.thought-tip.leaving {
+    visibility: visible;
+    animation: thought-away .16s ease-in forwards;
+}
+/* the two little bubbles that lead from the big one to the member */
+.thought-tip::before, .thought-tip::after {
+    content: "";
+    position: absolute;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 50%;
+    box-shadow: 2px 2px 0 var(--ink);
+    transform: scale(0);
+}
+.thought-tip::before { width: 15px; height: 15px; right: -21px; top: calc(var(--tail-y) - 14px); }
+.thought-tip::after { width: 9px; height: 9px; right: -40px; top: calc(var(--tail-y) - 10px); }
+.thought-tip.show::before { animation: thought-dot .38s cubic-bezier(.2, 1.9, .4, 1) .1s both; }
+.thought-tip.show::after { animation: thought-dot .38s cubic-bezier(.2, 1.9, .4, 1) .18s both; }
+.thought-tip.leaving::before, .thought-tip.leaving::after { animation: thought-dot-away .1s ease-in forwards; }
+
+@keyframes thought-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes thought-pop { from { transform: translateX(16px) scale(.55); } to { transform: none; } }
+@keyframes thought-away { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(16px) scale(.55); } }
+@keyframes thought-dot { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes thought-dot-away { from { transform: scale(1); } to { transform: scale(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .thought-tip.show, .thought-tip.leaving,
+    .thought-tip.show::before, .thought-tip.show::after,
+    .thought-tip.leaving::before, .thought-tip.leaving::after { animation: none; }
+    .thought-tip.show::before, .thought-tip.show::after { transform: none; }
+    .thought-tip.leaving { opacity: 0; }
+}
