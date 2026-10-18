@@ -1869,7 +1869,6 @@ const AVATAR_PX = 160;
 const BACKDROP_W = 600, BACKDROP_H = 200;
 const AVATAR_MAX_BYTES = 40 * 1024, BACKDROP_MAX_BYTES = 70 * 1024;
 const PROF_WAIT_MS = 5000;
-const PROFILE_COLORS = ["", "FF6FA5", "35D07F", "5CCBFF", "FF8A2B", "8B5CF6", "FFD23F", "2D6BFF"];   // "" = automatic
 
 const profileModal = $("profileModal"), profileCard = $("profileCard");
 const profiles = new Map();   // lower-case name -> profile (see blankProfile)
@@ -2100,10 +2099,17 @@ function renderProfile() {
     else renderProfileView(p);
 }
 
-function makeCloseButton() {
-    const b = mk("button", "btn small prof-close", "Close");
+// Round icon buttons from the design. kind: "close", "remove", "backdrop" (change backdrop) or "avatar" (change picture).
+// The tooltip (data-tip) says what the button does, because the same red X is used both to
+// remove a picture and to close the pop-up.
+function iconButton(kind, tip, onClick, opts) {
+    opts = opts || {};
+    const b = mk("button", "prof-icon" + (kind === "close" || kind === "remove" ? " red" : " i-" + kind) + (opts.end ? " tip-end" : ""));
     b.type = "button";
-    b.addEventListener("click", closeProfile);
+    b.dataset.tip = tip;
+    b.setAttribute("aria-label", tip);
+    if (opts.disabled) b.setAttribute("aria-disabled", "true");
+    b.addEventListener("click", () => { if (!opts.disabled) onClick(); });
     return b;
 }
 
@@ -2111,13 +2117,17 @@ function renderProfileView(p) {
     const mine = same(p.name, myName);
     const banner = mk("div", "prof-banner");
     paintBanner(banner, p);
-    banner.append(makeCloseButton());
+    const bannerTools = mk("div", "prof-banner-tools");
+    bannerTools.append(iconButton("close", "Close profile", closeProfile, { end: true }));
+    banner.append(bannerTools);
 
     const body = mk("div", "prof-body");
     const top = mk("div", "prof-top");
+    const avWrap = mk("div", "prof-avatar-wrap");
     const av = mk("div", "prof-avatar");
     paintAvatar(av, p);
-    top.append(av);
+    avWrap.append(av);
+    top.append(avWrap);
     if (p.thought) {
         top.append(mk("div", "prof-thought", p.thought));
     } else if (mine && p.loaded) {
@@ -2141,7 +2151,7 @@ function renderProfileView(p) {
     if (!p.loaded) {
         body.append(mk("p", "prof-note", p.failed ? "Couldn't load this profile." : "Loading…"));
         if (p.failed) {
-            const retry = mk("button", "btn small", "Try again");
+            const retry = mk("button", "prof-btn", "Try again");
             retry.type = "button";
             retry.addEventListener("click", () => { p.failed = false; renderProfile(); refreshProfile(profOpen); });
             const row = mk("div", "prof-actions");
@@ -2153,7 +2163,10 @@ function renderProfileView(p) {
     }
 
     const about = mk("div", "prof-sec");
-    about.append(mk("h3", "", "About"));
+    const aboutHead = mk("div", "prof-head");
+    aboutHead.append(mk("h3", "", "About"));
+    if (mine) aboutHead.append(mk("span", "prof-count", p.bio.length + "/" + PROF.bio));   // only you see your own counter
+    about.append(aboutHead);
     about.append(p.bio ? mk("p", "prof-bio", p.bio)
                       : mk("p", "prof-muted", mine ? "You haven't written a bio yet." : "No bio yet."));
     body.append(about);
@@ -2183,12 +2196,12 @@ function renderProfileView(p) {
 
     const actions = mk("div", "prof-actions");
     if (mine) {
-        const edit = mk("button", "btn blue small", "Edit profile");
+        const edit = mk("button", "prof-btn blue", "Edit Profile");
         edit.type = "button";
         edit.addEventListener("click", startProfileEdit);
         actions.append(edit);
     } else {
-        const mention = mk("button", "btn blue small", "Mention @" + p.name);
+        const mention = mk("button", "prof-btn blue", "Mention @" + p.name);
         mention.type = "button";
         mention.addEventListener("click", () => { insertMention(p.name); closeProfile(); closeDrawers(); });
         actions.append(mention);
@@ -2294,14 +2307,6 @@ function filePicker(kind) {
     return input;
 }
 
-function toolButton(label, onClick, disabled) {
-    const b = mk("button", "btn small", label);
-    b.type = "button";
-    b.disabled = !!disabled;
-    b.addEventListener("click", onClick);
-    return b;
-}
-
 function renderProfileEdit(p) {
     const d = profDraft;
     const busy = d.saving;
@@ -2311,46 +2316,49 @@ function renderProfileEdit(p) {
     const bgUrl = d.backdropGone ? "" : (d.backdropPreview || p.backdropUrl);
     const avUrl = d.avatarGone ? "" : (d.avatarPreview || p.avatarUrl);
 
+    // backdrop: change (picture icon) and remove (red X)
     const banner = mk("div", "prof-banner");
     paintBanner(banner, view, bgUrl);
-    banner.append(makeCloseButton());
     const bpick = filePicker("backdrop");
-    const tools = mk("div", "prof-banner-tools");
-    tools.append(toolButton("Change backdrop", () => bpick.click(), busy),
-                 toolButton("Remove", () => removeProfilePicture("backdrop"), busy || !bgUrl));
-    banner.append(tools, bpick);
+    const bannerTools = mk("div", "prof-banner-tools");
+    bannerTools.append(
+        iconButton("backdrop", "Change backdrop image", () => bpick.click(), { disabled: busy, end: true }),
+        iconButton("remove", "Remove backdrop image", () => removeProfilePicture("backdrop"), { disabled: busy || !bgUrl, end: true }));
+    banner.append(bannerTools, bpick);
 
     const body = mk("form", "prof-body prof-form");
     body.autocomplete = "off";
     body.addEventListener("submit", (e) => { e.preventDefault(); saveProfile(); });
 
+    // picture (change / remove) + thought bubble
     const top = mk("div", "prof-top");
+    const avWrap = mk("div", "prof-avatar-wrap");
     const av = mk("div", "prof-avatar");
     paintAvatar(av, view, avUrl);
-    top.append(av);
+    const apick = filePicker("avatar");
+    const atools = mk("div", "prof-avatar-tools");
+    atools.append(
+        iconButton("avatar", "Change profile picture", () => apick.click(), { disabled: busy }),
+        iconButton("remove", "Remove profile picture", () => removeProfilePicture("avatar"), { disabled: busy || !avUrl }));
+    avWrap.append(av, atools, apick);
+    top.append(avWrap);
     const thought = mk("input", "field");
     thought.type = "text";
     thought.maxLength = PROF.thought;
     thought.value = d.thought;
-    thought.placeholder = "Thought bubble: what's on your mind?";
+    thought.placeholder = "What's on your mind?";
     thought.setAttribute("aria-label", "Thought bubble");
     thought.disabled = busy;
     thought.addEventListener("input", () => { d.thought = thought.value; });
-    thought.style.marginTop = "12px";
     top.append(thought);
     body.append(top);
 
-    const apick = filePicker("avatar");
-    const atools = mk("div", "prof-tools");
-    atools.append(toolButton("Change picture", () => apick.click(), busy),
-                  toolButton("Remove picture", () => removeProfilePicture("avatar"), busy || !avUrl), apick);
-    body.append(atools);
-
     body.append(mk("h2", "prof-name", p.name));
 
-    const bioLabel = mk("label", "", "About you");
+    const head = mk("div", "prof-head");
+    const bioLabel = mk("label", "", "About You");
     const count = mk("span", "prof-count", d.bio.length + "/" + PROF.bio);
-    bioLabel.append(count);
+    head.append(bioLabel, count);
     const bio = mk("textarea", "field");
     bio.maxLength = PROF.bio;
     bio.value = d.bio;
@@ -2358,7 +2366,7 @@ function renderProfileEdit(p) {
     bio.disabled = busy;
     bio.addEventListener("input", () => { d.bio = bio.value; count.textContent = bio.value.length + "/" + PROF.bio; });
     bioLabel.htmlFor = bio.id = "profBio";
-    body.append(bioLabel, bio);
+    body.append(head, bio);
 
     body.append(mk("div", "lbl", "Links (up to " + PROF.links + ")"));
     d.links.forEach((row) => {
@@ -2384,31 +2392,19 @@ function renderProfileEdit(p) {
         body.append(wrap);
     });
 
-    body.append(mk("div", "lbl", "Card colour"));
-    const sw = mk("div", "swatches");
-    PROFILE_COLORS.forEach((c) => {
-        const b = mk("button", "swatch", c ? "" : "A");
-        b.type = "button";
-        b.disabled = busy;
-        b.style.background = c ? "#" + c : colorFor(p.name);
-        b.title = c ? "#" + c : "Automatic";
-        b.setAttribute("aria-label", c ? "Colour #" + c : "Automatic colour");
-        b.setAttribute("aria-pressed", String(d.color === c));
-        b.addEventListener("click", () => { d.color = c; renderProfile(); });
-        sw.append(b);
-    });
-    body.append(sw);
-
     const err = mk("p", "prof-error", d.error);
     err.hidden = !d.error;
     err.setAttribute("role", "alert");
     body.append(err);
 
     const actions = mk("div", "prof-actions");
-    const save = mk("button", "btn blue small", busy ? "Saving…" : "Save");
+    const save = mk("button", "prof-btn blue", busy ? "Saving…" : "SAVE");
     save.type = "submit";
     save.disabled = busy;
-    const cancel = toolButton("Cancel", cancelProfileEdit, busy);
+    const cancel = mk("button", "prof-btn", "Cancel");
+    cancel.type = "button";
+    cancel.disabled = busy;
+    cancel.addEventListener("click", cancelProfileEdit);
     actions.append(save, cancel);
     body.append(actions);
 
