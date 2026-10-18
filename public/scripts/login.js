@@ -73,7 +73,7 @@ function connect() {
             leaving = true;
             logLine("System", "Logged in as " + m.name + ". Opening the chat...");
             saveSession(myId, m.name, mySecret);
-            location.href = "/chat";
+            pageGo("/chat");
         } else if (m.type === "AUTHERR") {
             failAuth(m.name);
         }

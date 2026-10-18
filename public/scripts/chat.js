@@ -56,7 +56,7 @@ let warnedUnknown = false;
 
 // The login page gave this tab its id and name. Without them we were never logged in here.
 const stored = loadSession();
-if (!stored) location.replace("/");
+if (!stored) pageGo("/", { replace: true });
 const myId = stored ? stored.id : "";
 const mySecret = stored && stored.secret ? stored.secret : "";   // proves to the server that edit / delete come from this login
 
@@ -493,7 +493,7 @@ function leaveToLogin(text) {
     clearTimeout(authTimer);
     clearSession();
     if (text) setFlash(text);
-    location.replace("/");
+    pageGo("/", { replace: true });
 }
 
 // The server confirmed who we are. Make sure nobody is already online under this name.
@@ -1689,7 +1689,7 @@ $("logoutBtn").addEventListener("click", () => {
     sendPacket("LOGOUT", myId, myName, "");
     joined = false;
     clearSession();
-    location.href = "/";
+    pageGo("/");
 });
 
 // ---------- saved chat ----------

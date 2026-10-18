@@ -1172,6 +1172,9 @@ server.get = function (path, data){
     else if(path == "/style.css"){
         server.sendFile("public/style.css");
     }
+    else if(path == "/scripts/transition.js"){
+        server.sendFile("public/scripts/transition.js");
+    }
     else if(path == "/scripts/common.js"){
         server.sendFile("public/scripts/common.js");
     }

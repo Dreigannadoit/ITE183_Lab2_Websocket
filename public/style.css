@@ -1486,3 +1486,94 @@ body {
         transform: translateY(calc(var(--dir, 1) * 36px)) scale(.94) rotate(calc(var(--dir, 1) * -1.2deg));
     }
 }
+
+
+/* ------------------------------------------------------------
+   PAGE TRANSITIONS  (login <-> chat <-> 404)
+   Built by scripts/transition.js, which adds these classes to <html>:
+     pt-leaving   the curtain grows over the page from where you clicked (four coloured rings, one after another)
+     pt-arriving  the new page starts covered ...
+     pt-reveal    ... and the curtain shrinks away to show it
+     pt-came      the page was opened through a transition (stays on)
+   --x / --y (set on .pt-curtain) is where the curtain starts growing; --k orders the layers.
+   (prefers-reduced-motion: transition.js skips all of this and just navigates.)
+------------------------------------------------------------ */
+.pt-curtain {
+    position: fixed;
+    inset: 0;
+    z-index: 100001;                   /* above everything, even the thought bubble */
+    overflow: hidden;
+    pointer-events: none;
+    visibility: hidden;
+}
+html.pt-leaving .pt-curtain, html.pt-arriving .pt-curtain { visibility: visible; }
+html.pt-leaving .pt-curtain { pointer-events: auto; }   /* no clicks while we are leaving */
+
+.pt-layer { position: absolute; inset: 0; display: block; clip-path: circle(0 at 50% 50%); }
+.pt-layer.l1 { --k: 0; background: var(--yellow); }
+.pt-layer.l2 { --k: 1; background: var(--pink); }
+.pt-layer.l3 { --k: 2; background: var(--sky); }
+.pt-layer.l4 {
+    --k: 3;
+    background-color: var(--blue);
+    background-image: radial-gradient(rgba(255, 255, 255, .2) 2px, transparent 2.5px);
+    background-size: 26px 26px;
+}
+
+/* closing: each ring grows a little after the one below it */
+html.pt-leaving .pt-layer {
+    animation: pt-cover .42s cubic-bezier(.65, 0, .25, 1) both;
+    animation-delay: calc(var(--k) * 60ms);
+}
+/* opening: the top ring leaves first */
+html.pt-arriving .pt-layer { clip-path: circle(150vmax at 50% 50%); }
+html.pt-arriving.pt-reveal .pt-layer {
+    animation: pt-uncover .42s cubic-bezier(.65, 0, .25, 1) both;
+    animation-delay: calc((3 - var(--k)) * 60ms);
+}
+@keyframes pt-cover {
+    from { clip-path: circle(0 at var(--x, 50%) var(--y, 50%)); }
+    to { clip-path: circle(150vmax at var(--x, 50%) var(--y, 50%)); }
+}
+@keyframes pt-uncover {
+    from { clip-path: circle(150vmax at 50% 50%); }
+    to { clip-path: circle(0 at 50% 50%); }
+}
+
+/* the mascot in the middle of the curtain */
+.pt-badge {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 120px;
+    margin: -55px 0 0 -60px;
+    opacity: 0;
+    filter: drop-shadow(5px 5px 0 var(--ink));
+}
+html.pt-leaving .pt-badge {
+    animation: pt-badge-in .5s cubic-bezier(.2, 1.7, .4, 1) .32s both, pt-bob 1s ease-in-out .85s infinite;
+}
+html.pt-arriving .pt-badge { opacity: 1; transform: rotate(-5deg); }
+html.pt-arriving.pt-reveal .pt-badge { animation: pt-badge-out .28s ease-in both; }
+@keyframes pt-badge-in {
+    from { opacity: 0; transform: scale(.2) rotate(-24deg); }
+    to { opacity: 1; transform: rotate(-5deg); }
+}
+@keyframes pt-badge-out {
+    from { opacity: 1; transform: rotate(-5deg); }
+    to { opacity: 0; transform: scale(.2) rotate(18deg); }
+}
+@keyframes pt-bob { 50% { translate: 0 -10px; } }
+
+/* a page that was opened through the curtain pops its card in once the curtain is nearly gone */
+html.pt-came .join-card { animation: pop .55s cubic-bezier(.3, 1.6, .5, 1) .5s both; }
+
+/* the chat opens: the two side columns slide in and the middle rises (wide screens; on small screens they are drawers) */
+#chatScreen.active .main { animation: pt-rise .6s cubic-bezier(.2, 1.2, .4, 1) .05s backwards; }
+@media (min-width: 901px) {
+    #chatScreen.active .channels { animation: pt-from-left .65s cubic-bezier(.2, 1.2, .4, 1) backwards; }
+    #chatScreen.active .panel { animation: pt-from-right .65s cubic-bezier(.2, 1.2, .4, 1) .1s backwards; }
+}
+@keyframes pt-rise { from { opacity: 0; transform: translateY(28px) scale(.98); } }
+@keyframes pt-from-left { from { opacity: 0; transform: translateX(-60px); } }
+@keyframes pt-from-right { from { opacity: 0; transform: translateX(60px); } }
