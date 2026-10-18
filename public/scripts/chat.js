@@ -1884,6 +1884,99 @@ let profTimer = null;
 let profOpener = null;        // what had focus before the card opened
 let profAck = null;           // { resolve, reject } while a save waits for the server
 
+// ----- card animation state (see "PROFILE CARD ANIMATIONS" in style.css) -----
+const PROF_REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)");
+const PROF_OUT_MS = 440;          // how long the closing animation runs before the card is hidden
+const PROF_SWAP_MS = 330;         // old content leaves, then the new content is drawn
+let profClosing = false;
+let profSwapping = false;
+let profCloseTimer = null, profSwapTimer = null, profIntroTimer = null;
+let profIntroAt = 0, profIntroBase = 0, profIntroStep = 45;
+
+// Every piece of the card that flies in/out one after the other.
+const PROF_STG = [
+    ".prof-banner", ".prof-avatar-wrap", ".prof-thought", ".prof-top > .field",
+    ".prof-body > .prof-name", ".prof-body > .prof-status", ".prof-body > .prof-sec",
+    ".prof-body > .prof-head", ".prof-body > textarea.field", ".prof-body > .lbl",
+    ".prof-body > .prof-link-row", ".prof-body > .prof-note", ".prof-body > .prof-error:not([hidden])",
+    ".prof-links li", ".prof-actions .prof-btn"
+].join(", ");
+
+// Numbers the pieces (--i) and gives each its start delay (--d). While an entrance is still running, a redraw
+// (for example "Loading…" turning into the real profile) continues the same timeline instead of restarting it.
+function profNumber() {
+    const parts = profileCard.querySelectorAll(PROF_STG);
+    const elapsed = profileCard.classList.contains("is-in") ? performance.now() - profIntroAt : 0;
+    parts.forEach((el, i) => {
+        el.classList.add("stg");
+        el.style.setProperty("--i", i);
+        el.style.setProperty("--d", Math.round(profIntroBase + i * profIntroStep - elapsed) + "ms");
+    });
+    profileCard.style.setProperty("--n", parts.length);
+}
+
+// kind: "open" (card appears) or "swap" (view <-> edit). dir: 0 for open, 1 = content comes from the right, -1 = from the left.
+function profIntro(kind, dir) {
+    profileCard.dataset.intro = kind;
+    profileCard.style.setProperty("--dx", dir);
+    profileCard.style.setProperty("--dy", kind === "open" ? 24 : 10);
+    profIntroAt = performance.now();
+    profIntroBase = kind === "open" ? 220 : 30;
+    profIntroStep = kind === "open" ? 45 : 32;
+    profileCard.classList.add("is-in");
+    clearTimeout(profIntroTimer);
+    profIntroTimer = setTimeout(() => profileCard.classList.remove("is-in"), 2200);
+}
+
+function resetCardFx() {
+    clearTimeout(profSwapTimer);
+    clearTimeout(profIntroTimer);
+    profSwapping = false;
+    profileCard.classList.remove("is-in", "is-swap-out", "is-resizing", "is-jelly");
+    profileCard.style.height = "";
+    profileCard.style.transition = "";
+}
+
+// Switches between the view and the edit card with an animation: the old content slides away, the card
+// glides to its new height, and the new content flies in. change() flips the state; after() runs once it is drawn.
+// Returns false (and does nothing) if another switch is still running.
+function swapProfile(change, dir, after) {
+    if (profSwapping) return false;
+    if (profileModal.hidden || profClosing || PROF_REDUCED.matches) {
+        change();
+        renderProfile();
+        if (after) after();
+        return true;
+    }
+    profSwapping = true;
+    const h0 = profileCard.offsetHeight;
+    profileCard.style.height = h0 + "px";
+    profileCard.classList.remove("is-in", "is-jelly");
+    profileCard.style.setProperty("--dx", dir);
+    profileCard.classList.add("is-resizing", "is-swap-out");
+    profSwapTimer = setTimeout(() => {
+        profileCard.classList.remove("is-swap-out");
+        profileCard.style.transition = "none";
+        profileCard.style.height = "auto";
+        change();
+        profIntro("swap", dir);
+        renderProfile();
+        const h1 = profileCard.offsetHeight;          // the height the new content needs
+        profileCard.style.height = h0 + "px";
+        void profileCard.offsetHeight;                // commit the old height, then glide to the new one
+        profileCard.style.transition = "";
+        profileCard.style.height = h1 + "px";
+        profileCard.classList.add("is-jelly");
+        if (after) after();
+        profSwapTimer = setTimeout(() => {
+            profileCard.classList.remove("is-resizing", "is-jelly");
+            profileCard.style.height = "";
+            profSwapping = false;
+        }, 650);
+    }, PROF_SWAP_MS);
+    return true;
+}
+
 function blankProfile(name) {
     return { name, loaded: false, failed: false, since: 0, color: "", thought: "", bio: "", links: [],
              avatarVer: 0, backdropVer: 0, avatarUrl: "", backdropUrl: "", avatarShown: -1, backdropShown: -1 };
@@ -1924,6 +2017,8 @@ function hostOf(u) {
 
 // ----- opening and closing -----
 function openProfile(name) {
+    if (profClosing) finishClose();               // reopened while the old card was still leaving
+    resetCardFx();
     const key = name.toLowerCase();
     profOpener = document.activeElement;
     profOpen = key;
@@ -1933,10 +2028,11 @@ function openProfile(name) {
     const p = profiles.get(key);
     p.failed = false;
     profileModal.hidden = false;
+    profIntro("open", 0);
     renderProfile();
     refreshProfile(key);
     const first = profileCard.querySelector("button");
-    if (first) first.focus();
+    if (first) first.focus({ preventScroll: true });
 }
 
 function refreshProfile(key) {
@@ -1950,16 +2046,31 @@ function refreshProfile(key) {
 }
 
 function closeProfile() {
-    if (profileModal.hidden) return;
+    if (profileModal.hidden || profClosing) return;
     discardDraftPreviews();
-    profileModal.hidden = true;
     profOpen = "";
     profEditing = false;
     profDraft = null;
     clearTimeout(profTimer);
-    profileCard.replaceChildren();
-    if (profOpener && profOpener.focus) { try { profOpener.focus(); } catch (err) { } }
+    if (profOpener && profOpener.focus) { try { profOpener.focus({ preventScroll: true }); } catch (err) { } }
     profOpener = null;
+    if (PROF_REDUCED.matches) { finishClose(); return; }
+    // let the card play its exit animation first; finishClose() hides it afterwards
+    resetCardFx();
+    profClosing = true;
+    profileCard.classList.add("is-out");
+    profileModal.classList.add("is-closing");
+    profCloseTimer = setTimeout(finishClose, PROF_OUT_MS);
+}
+
+function finishClose() {
+    clearTimeout(profCloseTimer);
+    profClosing = false;
+    resetCardFx();
+    profileModal.hidden = true;
+    profileModal.classList.remove("is-closing");
+    profileCard.classList.remove("is-out");
+    profileCard.replaceChildren();
 }
 
 profileModal.addEventListener("mousedown", (e) => { if (e.target === profileModal) closeProfile(); });
@@ -2101,6 +2212,7 @@ function renderProfile() {
     profileCard.setAttribute("aria-label", p.name + "'s profile");
     if (profEditing && profDraft) renderProfileEdit(p);
     else renderProfileView(p);
+    profNumber();
 }
 
 // Round icon buttons from the design. kind: "close", "remove", "backdrop" (change backdrop) or "avatar" (change picture).
@@ -2218,16 +2330,19 @@ function renderProfileView(p) {
 function startProfileEdit() {
     const p = profiles.get(profOpen);
     if (!p || !same(p.name, myName)) return;
+    if (profSwapping) return;
     const rows = p.links.map((x) => ({ l: x.l, u: x.u }));
     while (rows.length < PROF.links) rows.push({ l: "", u: "" });
-    profDraft = { thought: p.thought, bio: p.bio, links: rows, color: p.color,
-                  avatar: null, avatarGone: false, avatarPreview: "",
-                  backdrop: null, backdropGone: false, backdropPreview: "",
-                  saving: false, error: "" };
-    profEditing = true;
-    renderProfile();
-    const f = profileCard.querySelector("input[type=text]");
-    if (f) f.focus();
+    swapProfile(() => {
+        profDraft = { thought: p.thought, bio: p.bio, links: rows, color: p.color,
+                      avatar: null, avatarGone: false, avatarPreview: "",
+                      backdrop: null, backdropGone: false, backdropPreview: "",
+                      saving: false, error: "" };
+        profEditing = true;
+    }, 1, () => {
+        const f = profileCard.querySelector("input[type=text]");
+        if (f) f.focus({ preventScroll: true });
+    });
 }
 
 function discardDraftPreviews() {
@@ -2237,11 +2352,12 @@ function discardDraftPreviews() {
 }
 
 function cancelProfileEdit() {
-    discardDraftPreviews();
-    profEditing = false;
-    profDraft = null;
-    renderProfile();
-    refreshProfile(profOpen);
+    if (profSwapping) return;
+    swapProfile(() => {
+        discardDraftPreviews();
+        profEditing = false;
+        profDraft = null;
+    }, -1, () => refreshProfile(profOpen));
 }
 
 // Crop to the middle of the picture so it fills w x h, then squeeze it under maxBytes.
@@ -2491,13 +2607,18 @@ async function saveProfile() {
     }
     profAck = null;
     if (d !== profDraft) return;           // closed while saving: the change is saved anyway
-    discardDraftPreviews();
-    profEditing = false;
-    profDraft = null;
-    const p = profiles.get(profOpen);
-    if (p) { p.loaded = true; }
-    renderProfile();
-    refreshProfile(profOpen);
+    const finishSave = () => {
+        discardDraftPreviews();
+        profEditing = false;
+        profDraft = null;
+        const p = profiles.get(profOpen);
+        if (p) { p.loaded = true; }
+    };
+    if (!swapProfile(finishSave, -1, () => refreshProfile(profOpen))) {
+        finishSave();
+        renderProfile();
+        refreshProfile(profOpen);
+    }
 }
 
 function onProfileSaved() {

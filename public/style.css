@@ -903,6 +903,9 @@ body {
     place-items: center;
     padding: 16px;
     background: rgba(27, 18, 48, .72);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    perspective: 1400px;
 }
 .prof-modal[hidden] { display: none; }
 .prof-card {
@@ -1124,6 +1127,153 @@ body {
 .prof-error[hidden] { display: none; }
 .prof-file { display: none; }
 .prof-form .prof-actions { margin-top: 14px; gap: 12px; }
+
+/* ------------------------------------------------------------
+   PROFILE CARD ANIMATIONS
+   open:   backdrop fades + blurs in, the card tips up and springs into place, then every piece of it
+           (banner, picture, thought bubble, name, status, sections, links, buttons) flies in one after another
+   close:  the pieces sink away in reverse order while the card tilts back and drops out
+   switch: view <-> edit slides the old content away, glides the card to its new height and flies the new content in
+   chat.js numbers the pieces (--i) and sets each start delay (--d), --dx is the slide direction, --n the piece count.
+------------------------------------------------------------ */
+.prof-modal:not([hidden]) { animation: prof-backdrop-in .4s ease both; }
+.prof-modal:not([hidden]) .prof-card { animation: prof-card-in .8s cubic-bezier(.2, 1.25, .4, 1) backwards; transform-origin: 50% 100%; }
+
+/* --- pieces flying in --- */
+.prof-card.is-in .stg { animation: prof-rise .62s cubic-bezier(.2, 1.2, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+
+/* backdrop picture: wipes down from the top with a shine sweeping across */
+.prof-card[data-intro="open"].is-in .prof-banner.stg { animation: prof-banner-wipe .85s cubic-bezier(.2, .9, .3, 1) backwards; animation-delay: var(--d, 0ms); transform-origin: 50% 0; }
+.prof-card[data-intro="swap"].is-in .prof-banner.stg { animation: prof-banner-flash .6s ease-out backwards; animation-delay: var(--d, 0ms); }
+.prof-banner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(-120%);
+    background: linear-gradient(105deg, transparent 36%, rgba(255, 255, 255, .6) 50%, transparent 64%);
+}
+.prof-card.is-in .prof-banner::after { animation: prof-shine 1s ease-out backwards; animation-delay: calc(var(--d, 0ms) + 380ms); }
+
+/* picture: spins and pops up, then a ring ripples out of it */
+.prof-card[data-intro="open"].is-in .prof-avatar-wrap.stg { animation: prof-avatar-in .85s cubic-bezier(.2, 1.5, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+.prof-card[data-intro="swap"].is-in .prof-avatar-wrap.stg { animation: prof-bump .6s cubic-bezier(.2, 1.7, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+.prof-avatar-wrap::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border: 3px solid var(--blue);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+}
+.prof-card.is-in .prof-avatar-wrap::after { animation: prof-ring .9s ease-out backwards; animation-delay: calc(var(--d, 0ms) + 320ms); }
+
+/* thought bubble: the two little bubbles pop first, then the big one grows out of them */
+.prof-card.is-in .prof-thought.stg { animation: prof-bubble .6s cubic-bezier(.2, 1.6, .4, 1) backwards; animation-delay: calc(var(--d, 0ms) + 140ms); transform-origin: 0 0; }
+.prof-card.is-in .prof-thought::before { animation: prof-dot .45s cubic-bezier(.2, 1.8, .4, 1) backwards; animation-delay: calc(var(--d, 0ms) + 60ms); }
+.prof-card.is-in .prof-thought::after { animation: prof-dot .45s cubic-bezier(.2, 1.8, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+
+/* name slides in with a lean, status dot pings */
+.prof-card.is-in .prof-name.stg { animation: prof-name-in .65s cubic-bezier(.2, 1.3, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+.prof-card.is-in .prof-status .pill[data-state="online"] .dot { animation: prof-ping 1.1s ease-out 2 backwards; animation-delay: calc(var(--d, 0ms) + 450ms); }
+
+/* buttons drop in with a bounce */
+.prof-card.is-in .prof-actions .prof-btn.stg { animation: prof-btn-in .6s cubic-bezier(.2, 1.7, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+
+/* an error message shakes when it shows up */
+.prof-error:not([hidden]) { animation: prof-shake .5s ease both; }
+
+/* --- view <-> edit --- */
+.prof-card.is-resizing { overflow: hidden; transition: height .6s cubic-bezier(.3, 1.2, .4, 1); }
+.prof-card.is-swap-out { pointer-events: none; }
+.prof-card.is-swap-out .stg:not(.prof-banner):not(.prof-avatar-wrap) { animation: prof-swap-out .22s ease-in both; animation-delay: calc(var(--i, 0) * 9ms); }
+.prof-modal:not([hidden]) .prof-card.is-jelly { animation: prof-jelly .6s ease-out; }
+
+/* --- closing --- */
+.prof-modal.is-closing { animation: prof-backdrop-out .4s ease-in both; pointer-events: none; }
+.prof-modal.is-closing .prof-card { animation: prof-card-out .42s cubic-bezier(.5, 0, .75, .4) both; transform-origin: 50% 100%; }
+.prof-card.is-out .stg { animation: prof-sink .24s ease-in both; animation-delay: calc((var(--n, 8) - var(--i, 0)) * 10ms); }
+.prof-card.is-out .prof-banner::after, .prof-card.is-out .prof-avatar-wrap::after { animation: none; }
+
+@keyframes prof-backdrop-in {
+    from { background-color: rgba(27, 18, 48, 0); -webkit-backdrop-filter: blur(0); backdrop-filter: blur(0); }
+}
+@keyframes prof-backdrop-out {
+    to { background-color: rgba(27, 18, 48, 0); -webkit-backdrop-filter: blur(0); backdrop-filter: blur(0); }
+}
+@keyframes prof-card-in {
+    0% { opacity: 0; transform: translateY(80px) scale(.74) rotateX(26deg) rotate(-3deg); box-shadow: 0 0 0 var(--prof-black); }
+    35% { opacity: 1; }
+    100% { transform: none; box-shadow: 7px 7px 0 var(--prof-black); }
+}
+@keyframes prof-card-out {
+    35% { transform: translateY(-8px) scale(1.01); opacity: 1; }
+    100% { opacity: 0; transform: translateY(60px) scale(.8) rotateX(-20deg) rotate(2deg); box-shadow: 0 0 0 var(--prof-black); }
+}
+@keyframes prof-rise {
+    from { opacity: 0; transform: translate(calc(var(--dx, 0) * 36px), calc(var(--dy, 22) * 1px)) scale(.94); filter: blur(5px); }
+}
+@keyframes prof-sink {
+    to { opacity: 0; transform: translateY(16px) scale(.93); filter: blur(3px); }
+}
+@keyframes prof-swap-out {
+    to { opacity: 0; transform: translateX(calc(var(--dx, 1) * -34px)) scale(.95); filter: blur(4px); }
+}
+@keyframes prof-banner-wipe {
+    from { clip-path: inset(0 0 100% 0 round 19px 19px 0 0); transform: scaleY(1.2); filter: saturate(0) brightness(1.5); }
+    to { clip-path: inset(0 0 0 0 round 19px 19px 0 0); }
+}
+@keyframes prof-banner-flash {
+    0% { filter: brightness(1.5) saturate(.4); }
+    100% { filter: none; }
+}
+@keyframes prof-shine {
+    0% { opacity: 1; transform: translateX(-120%); }
+    100% { opacity: 1; transform: translateX(120%); }
+}
+@keyframes prof-avatar-in {
+    from { opacity: 0; transform: translateY(28px) scale(.2) rotate(-28deg); }
+}
+@keyframes prof-bump {
+    0% { transform: scale(.84) rotate(-8deg); }
+}
+@keyframes prof-ring {
+    0% { opacity: .9; transform: scale(.85); }
+    100% { opacity: 0; transform: scale(1.7); }
+}
+@keyframes prof-bubble {
+    from { opacity: 0; transform: scale(.15) translate(-14px, 10px); }
+}
+@keyframes prof-dot {
+    from { opacity: 0; transform: scale(0); }
+}
+@keyframes prof-name-in {
+    from { opacity: 0; transform: translateX(-26px) skewX(-10deg); filter: blur(5px); }
+}
+@keyframes prof-ping {
+    0% { box-shadow: 0 0 0 0 rgba(41, 156, 58, .75); }
+    100% { box-shadow: 0 0 0 10px rgba(41, 156, 58, 0); }
+}
+@keyframes prof-btn-in {
+    from { opacity: 0; transform: translateY(26px) scale(.8) rotate(-3deg); }
+}
+@keyframes prof-jelly {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.02, .985); }
+    55% { transform: scale(.992, 1.008); }
+    100% { transform: scale(1); }
+}
+@keyframes prof-shake {
+    0% { opacity: 0; transform: translateY(-6px); }
+    25% { opacity: 1; transform: translateX(-7px); }
+    45% { transform: translateX(6px); }
+    65% { transform: translateX(-4px); }
+    85% { transform: translateX(2px); }
+    100% { transform: none; }
+}
 
 @media (max-width: 480px) {
     .prof-link-row { grid-template-columns: 1fr 1.6fr; }
