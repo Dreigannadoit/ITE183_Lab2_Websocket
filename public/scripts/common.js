@@ -77,7 +77,8 @@ function parse(data) {
 // ---------- console (shows what travels over the socket) ----------
 const consoleEl = $("console"), consoleBody = $("consoleBody"), consoleToggle = $("consoleToggle");
 // Packets too chatty (or too private, like passwords) to list in the console.
-const QUIET_TYPES = ["TYPING", "IMGC", "IMGGET", "PICH", "PICC", "SIGNUP", "LOGIN", "RESUME", "LOGOUT", "SAVE", "HISTORY", "HIST", "HISTEND", "USERS", "USER", "USEREND", "AUTHOK", "AUTHERR", "SAVEERR", "EDIT", "EDITERR", "DELETE", "DELETEERR"];
+const QUIET_TYPES = ["TYPING", "IMGC", "IMGGET", "PICH", "PICC", "SIGNUP", "LOGIN", "RESUME", "LOGOUT", "SAVE", "HISTORY", "HIST", "HISTEND", "USERS", "USER", "USEREND", "AUTHOK", "AUTHERR", "SAVEERR", "EDIT", "EDITERR", "DELETE", "DELETEERR",
+    "PROFGET", "PROF", "PROFNONE", "PROFF", "PROFDONE", "PROFOK", "PROFERR", "PROFCHG", "PFUH", "PFUC", "PFUDEL", "PFGET", "PFIH", "PFIC", "PFIERR"];
 const TAG_CLASS = { System: "t-sys", Server: "t-srv", Client: "t-cli" };
 
 function logLine(tag, text) {

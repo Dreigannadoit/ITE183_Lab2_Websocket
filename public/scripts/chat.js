@@ -281,6 +281,9 @@ function connect() {
         if (wrapped) data = wrapped[1];
 
         const m = parse(data);
+        // Profile packets are only ever sent by the server to one tab. A copy that came wrapped as
+        // "User <n> says: ..." was relayed from another client, so it is a fake and is ignored.
+        if (wrapped && /^(PROF|PF)/.test(m.type)) return;
         if (handleServerReply(m)) return;
         if (QUIET_TYPES.indexOf(m.type) < 0) {
             if (m.type === "MSG") {
@@ -298,6 +301,10 @@ function connect() {
         // "User <n> says: ..." was relayed from a client, so it is a fake and is ignored.
         if (m.type === "EDITED" || m.type === "DELETED") {
             if (!wrapped) applyRemote(m);
+            return;
+        }
+        if (m.type === "PROFCHG") {
+            if (!wrapped && joined) onProfileChanged(m.name);
             return;
         }
 
@@ -1495,11 +1502,12 @@ function renderUsers() {
             tag.className = "you";
             tag.textContent = "you";
             btn.append(tag);
-            btn.title = "That's you";
+            btn.title = "View your profile";
         } else {
-            btn.title = "Click to mention " + r.name + (active ? "" : " (offline)");
-            btn.addEventListener("click", () => { insertMention(r.name); closeDrawers(); });
+            btn.title = "View " + r.name + "'s profile" + (active ? "" : " (offline)");
         }
+        btn.setAttribute("aria-haspopup", "dialog");
+        btn.addEventListener("click", () => { closeDrawers(); openProfile(r.name); });
         li.append(btn);
         usersEl.appendChild(li);
     });
@@ -1528,7 +1536,7 @@ chanBtn.addEventListener("click", () => toggleDrawer(channelsEl, chanBtn));
 whoBtn.addEventListener("click", () => toggleDrawer(panel, whoBtn));
 scrim.addEventListener("click", closeDrawers);
 document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { closeDrawers(); closeLightbox(); }
+    if (e.key === "Escape") { closeDrawers(); closeLightbox(); closeProfile(); }
     // Alt + Up/Down jumps between channels
     if (joined && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         e.preventDefault();
@@ -1596,6 +1604,13 @@ function handleServerReply(m) {
         failPicture(m.name, "Picture is no longer saved");
         return true;
     }
+    if (m.type === "PROF") { onProfile(m); return true; }
+    if (m.type === "PROFNONE") { onProfileMissing(m.name); return true; }
+    if (m.type === "PROFOK") { onProfileSaved(); return true; }
+    if (m.type === "PROFERR") { onProfileError(m.name); return true; }
+    if (m.type === "PFIH") { onProfileImageHeader(m); return true; }
+    if (m.type === "PFIC") { onProfileImageChunk(m); return true; }
+    if (m.type === "PFIERR") { onProfileImageMissing({ name: m.name, payload: m.payload }); return true; }
     if (m.type === "EDITERR" || m.type === "DELETEERR") {
         // name = the reason
         const what = m.type === "EDITERR" ? "edit" : "delete";
@@ -1702,6 +1717,673 @@ $("chatForm").addEventListener("submit", (e) => {
     }
     msgInput.focus();
 });
+
+// ---------- profiles ----------
+// A profile card shows a person's picture, backdrop, thought bubble, bio and links.
+// It opens from your own user card (bottom left) or from a member in the right-hand panel.
+// Packets (see app.bzg; all answers go to this tab only):
+//   PROFGET|id||username              -> PROF|id|username|since|avatarVer|backdropVer|color|thought|links|bio
+//   PFGET|id||username|kind           -> PFIH + PFIC ... (a picture, kind = avatar or backdrop) or PFIERR
+//   PROFF|id||secret|field|value      change one of YOUR fields (thought, bio, links, color)
+//   PROFDONE|id||secret               all fields sent -> PROFOK, and everybody gets PROFCHG||username
+//   PFUH / PFUC / PFUDEL              upload / remove YOUR picture or backdrop
+// Text fields travel URL-encoded so they can never contain the "|" separator.
+const PROF = { thought: 80, bio: 240, linkLabel: 20, linkUrl: 120, links: 3 };
+const PROF_ENC_MAX = { thought: 300, bio: 900, links: 1400 };     // same limits as the server
+const AVATAR_PX = 160;
+const BACKDROP_W = 600, BACKDROP_H = 200;
+const AVATAR_MAX_BYTES = 40 * 1024, BACKDROP_MAX_BYTES = 70 * 1024;
+const PROF_WAIT_MS = 5000;
+const PROFILE_COLORS = ["", "FF6FA5", "35D07F", "5CCBFF", "FF8A2B", "8B5CF6", "FFD23F", "2D6BFF"];   // "" = automatic
+
+const profileModal = $("profileModal"), profileCard = $("profileCard");
+const profiles = new Map();   // lower-case name -> profile (see blankProfile)
+const profileImgBuf = new Map(); // "name|kind" -> picture pieces still arriving
+let profOpen = "";            // lower-case name of the card on screen ("" = closed)
+let profEditing = false;
+let profDraft = null;
+let profTimer = null;
+let profOpener = null;        // what had focus before the card opened
+let profAck = null;           // { resolve, reject } while a save waits for the server
+
+function blankProfile(name) {
+    return { name, loaded: false, failed: false, since: 0, color: "", thought: "", bio: "", links: [],
+             avatarVer: 0, backdropVer: 0, avatarUrl: "", backdropUrl: "", avatarShown: -1, backdropShown: -1 };
+}
+
+function mk(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
+
+const safeDecode = (s) => { try { return decodeURIComponent(s); } catch (err) { return ""; } };
+const hexOk = (c) => /^[0-9a-fA-F]{6}$/.test(c);
+const accentOf = (p) => (hexOk(p.color) ? "#" + p.color : colorFor(p.name));
+
+// Links are stored as JSON. Anything that isn't a plain http(s) address is dropped.
+function parseLinks(json) {
+    let list = [];
+    try { list = JSON.parse(json); } catch (err) { return []; }
+    if (!Array.isArray(list)) return [];
+    return list.slice(0, PROF.links).map((x) => ({
+        l: String((x && x.l) || "").slice(0, PROF.linkLabel),
+        u: String((x && x.u) || "").slice(0, PROF.linkUrl)
+    })).filter((x) => /^https?:\/\/[^\s]+$/i.test(x.u));
+}
+
+function normalizeUrl(u) {
+    u = u.trim();
+    if (!u) return "";
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = "https://" + u;
+    return u;
+}
+
+function hostOf(u) {
+    try { return new URL(u).hostname.replace(/^www\./, ""); } catch (err) { return u; }
+}
+
+// ----- opening and closing -----
+function openProfile(name) {
+    const key = name.toLowerCase();
+    profOpener = document.activeElement;
+    profOpen = key;
+    profEditing = false;
+    profDraft = null;
+    if (!profiles.has(key)) profiles.set(key, blankProfile(name));
+    const p = profiles.get(key);
+    p.failed = false;
+    profileModal.hidden = false;
+    renderProfile();
+    refreshProfile(key);
+    const first = profileCard.querySelector("button");
+    if (first) first.focus();
+}
+
+function refreshProfile(key) {
+    const p = profiles.get(key);
+    if (!p) return;
+    clearTimeout(profTimer);
+    profTimer = setTimeout(() => {
+        if (!p.loaded) { p.failed = true; if (profOpen === key && !profEditing) renderProfile(); }
+    }, PROF_WAIT_MS);
+    if (!sendPacket("PROFGET", myId, "", p.name)) { p.failed = true; renderProfile(); }
+}
+
+function closeProfile() {
+    if (profileModal.hidden) return;
+    discardDraftPreviews();
+    profileModal.hidden = true;
+    profOpen = "";
+    profEditing = false;
+    profDraft = null;
+    clearTimeout(profTimer);
+    profileCard.replaceChildren();
+    if (profOpener && profOpener.focus) { try { profOpener.focus(); } catch (err) { } }
+    profOpener = null;
+}
+
+profileModal.addEventListener("mousedown", (e) => { if (e.target === profileModal) closeProfile(); });
+
+function dropProfile(key) {
+    const p = profiles.get(key);
+    if (!p) return;
+    [p.avatarUrl, p.backdropUrl].forEach((u) => { if (u) URL.revokeObjectURL(u); });
+    profiles.delete(key);
+}
+
+// ----- messages from the server -----
+function onProfile(m) {
+    // name = username, payload = since|avatarVer|backdropVer|color|thought|links|bio
+    const key = m.name.toLowerCase();
+    const p = profiles.get(key);
+    if (!p) return;
+    const f = m.payload.split("|");
+    p.name = m.name;
+    p.since = Number(f[0]) || 0;
+    p.avatarVer = Number(f[1]) || 0;
+    p.backdropVer = Number(f[2]) || 0;
+    p.color = hexOk(f[3] || "") ? f[3] : "";
+    p.thought = safeDecode(f[4] || "").slice(0, PROF.thought);
+    p.links = parseLinks(safeDecode(f[5] || ""));
+    p.bio = safeDecode(f[6] || "").slice(0, PROF.bio);
+    p.loaded = true;
+    p.failed = false;
+    clearTimeout(profTimer);
+    ["avatar", "backdrop"].forEach((kind) => {
+        const ver = p[kind + "Ver"];
+        if (ver === 0) {
+            if (p[kind + "Url"]) URL.revokeObjectURL(p[kind + "Url"]);
+            p[kind + "Url"] = "";
+            p[kind + "Shown"] = 0;
+        } else if (p[kind + "Shown"] !== ver) {
+            p[kind + "Shown"] = ver;          // asked for: the picture shows up when it arrives
+            sendPacket("PFGET", myId, "", p.name + "|" + kind);
+        }
+    });
+    if (profOpen === key && !profEditing) renderProfile();
+}
+
+function onProfileMissing(name) {
+    const p = profiles.get(name.toLowerCase());
+    if (!p) return;
+    p.failed = true;
+    clearTimeout(profTimer);
+    if (profOpen === name.toLowerCase() && !profEditing) renderProfile();
+}
+
+function onProfileChanged(name) {
+    const key = name.toLowerCase();
+    if (profOpen === key) {
+        if (!profEditing) refreshProfile(key);   // while you are editing, the save refreshes it afterwards
+    } else {
+        dropProfile(key);
+    }
+}
+
+// PFIH: name = username, payload = kind|packets|mime
+function onProfileImageHeader(m) {
+    const f = m.payload.split("|");
+    const total = +f[1];
+    if (!profiles.has(m.name.toLowerCase()) || !(total >= 1 && total <= 99)) return;
+    const key = m.name.toLowerCase() + "|" + f[0];
+    const old = profileImgBuf.get(key);
+    if (old) clearTimeout(old.timer);
+    profileImgBuf.set(key, { parts: new Array(total), got: 0, total, mime: f[2],
+        timer: setTimeout(() => profileImgBuf.delete(key), TRANSFER_TIMEOUT_MS) });
+}
+
+// PFIC: name = username, payload = kind|index|data
+function onProfileImageChunk(m) {
+    const k1 = m.payload.indexOf("|");
+    const k2 = m.payload.indexOf("|", k1 + 1);
+    if (k1 < 0 || k2 < 0) return;
+    const kind = m.payload.slice(0, k1);
+    const index = +m.payload.slice(k1 + 1, k2);
+    const key = m.name.toLowerCase() + "|" + kind;
+    const buf = profileImgBuf.get(key);
+    if (!buf || !(index >= 0 && index < buf.total) || buf.parts[index] !== undefined) return;
+    buf.parts[index] = m.payload.slice(k2 + 1);
+    buf.got++;
+    if (buf.got < buf.total) return;
+    clearTimeout(buf.timer);
+    profileImgBuf.delete(key);
+    const p = profiles.get(m.name.toLowerCase());
+    if (!p || (kind !== "avatar" && kind !== "backdrop")) return;
+    try {
+        const url = URL.createObjectURL(base64ToBlob(buf.parts.join(""), IMAGE_TYPES.indexOf(buf.mime) >= 0 ? buf.mime : "image/jpeg"));
+        if (p[kind + "Url"]) URL.revokeObjectURL(p[kind + "Url"]);
+        p[kind + "Url"] = url;
+    } catch (err) { return; }
+    if (profOpen === m.name.toLowerCase() && !profEditing) renderProfile();
+}
+
+function onProfileImageMissing(m) {
+    // name = username, payload = kind: nothing to show, keep the letter / colour
+    const p = profiles.get(m.name.toLowerCase());
+    if (p && (m.payload === "avatar" || m.payload === "backdrop")) p[m.payload + "Shown"] = -1;
+}
+
+// ----- drawing the card -----
+function isOnline(name) {
+    return Array.from(peers.values()).some((x) => same(x.name, name));
+}
+
+function paintBanner(banner, p, previewUrl) {
+    const url = previewUrl !== undefined ? previewUrl : p.backdropUrl;
+    banner.style.backgroundColor = accentOf(p);
+    if (url) {
+        banner.classList.add("has-img");
+        banner.style.backgroundImage = 'url("' + url + '")';
+    } else {
+        banner.classList.remove("has-img");
+        banner.style.backgroundImage = "";
+    }
+}
+
+function paintAvatar(av, p, previewUrl) {
+    const url = previewUrl !== undefined ? previewUrl : p.avatarUrl;
+    av.style.backgroundColor = colorFor(p.name);
+    if (url) {
+        av.classList.add("has-img");
+        av.style.backgroundImage = 'url("' + url + '")';
+        av.textContent = "";
+    } else {
+        av.classList.remove("has-img");
+        av.style.backgroundImage = "";
+        av.textContent = p.name.charAt(0).toUpperCase();
+    }
+}
+
+function renderProfile() {
+    const p = profiles.get(profOpen);
+    if (!p) return;
+    profileCard.replaceChildren();
+    profileCard.setAttribute("aria-label", p.name + "'s profile");
+    if (profEditing && profDraft) renderProfileEdit(p);
+    else renderProfileView(p);
+}
+
+function makeCloseButton() {
+    const b = mk("button", "btn small prof-close", "Close");
+    b.type = "button";
+    b.addEventListener("click", closeProfile);
+    return b;
+}
+
+function renderProfileView(p) {
+    const mine = same(p.name, myName);
+    const banner = mk("div", "prof-banner");
+    paintBanner(banner, p);
+    banner.append(makeCloseButton());
+
+    const body = mk("div", "prof-body");
+    const top = mk("div", "prof-top");
+    const av = mk("div", "prof-avatar");
+    paintAvatar(av, p);
+    top.append(av);
+    if (p.thought) {
+        top.append(mk("div", "prof-thought", p.thought));
+    } else if (mine && p.loaded) {
+        top.append(mk("div", "prof-thought empty", "Add a thought bubble…"));
+    }
+    body.append(top, mk("h2", "prof-name", p.name));
+    profileCard.setAttribute("aria-label", p.name + "'s profile");
+
+    const status = mk("div", "prof-status");
+    const on = isOnline(p.name);
+    const pill = mk("span", "pill");
+    pill.dataset.state = on ? "online" : "offline";
+    pill.append(mk("span", "dot"), mk("span", "txt", on ? "Online" : "Offline"));
+    status.append(pill);
+    if (p.since) {
+        status.append(mk("span", "prof-since", "Member since " +
+            new Date(p.since * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" })));
+    }
+    body.append(status);
+
+    if (!p.loaded) {
+        body.append(mk("p", "prof-note", p.failed ? "Couldn't load this profile." : "Loading…"));
+        if (p.failed) {
+            const retry = mk("button", "btn small", "Try again");
+            retry.type = "button";
+            retry.addEventListener("click", () => { p.failed = false; renderProfile(); refreshProfile(profOpen); });
+            const row = mk("div", "prof-actions");
+            row.append(retry);
+            body.append(row);
+        }
+        profileCard.append(banner, body);
+        return;
+    }
+
+    const about = mk("div", "prof-sec");
+    about.append(mk("h3", "", "About"));
+    about.append(p.bio ? mk("p", "prof-bio", p.bio)
+                      : mk("p", "prof-muted", mine ? "You haven't written a bio yet." : "No bio yet."));
+    body.append(about);
+
+    if (p.links.length) {
+        const sec = mk("div", "prof-sec");
+        sec.append(mk("h3", "", "Links"));
+        const ul = mk("ul", "prof-links");
+        p.links.forEach((x) => {
+            const li = mk("li");
+            const a = mk("a");
+            a.href = x.u;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer nofollow";
+            a.append(document.createTextNode(x.l || hostOf(x.u)));
+            if (x.l) a.append(mk("small", "", hostOf(x.u)));
+            li.append(a);
+            ul.append(li);
+        });
+        sec.append(ul);
+        body.append(sec);
+    } else if (mine) {
+        const sec = mk("div", "prof-sec");
+        sec.append(mk("h3", "", "Links"), mk("p", "prof-muted", "No links yet."));
+        body.append(sec);
+    }
+
+    const actions = mk("div", "prof-actions");
+    if (mine) {
+        const edit = mk("button", "btn blue small", "Edit profile");
+        edit.type = "button";
+        edit.addEventListener("click", startProfileEdit);
+        actions.append(edit);
+    } else {
+        const mention = mk("button", "btn blue small", "Mention @" + p.name);
+        mention.type = "button";
+        mention.addEventListener("click", () => { insertMention(p.name); closeProfile(); closeDrawers(); });
+        actions.append(mention);
+    }
+    body.append(actions);
+    profileCard.append(banner, body);
+}
+
+// ----- editing your own card -----
+function startProfileEdit() {
+    const p = profiles.get(profOpen);
+    if (!p || !same(p.name, myName)) return;
+    const rows = p.links.map((x) => ({ l: x.l, u: x.u }));
+    while (rows.length < PROF.links) rows.push({ l: "", u: "" });
+    profDraft = { thought: p.thought, bio: p.bio, links: rows, color: p.color,
+                  avatar: null, avatarGone: false, avatarPreview: "",
+                  backdrop: null, backdropGone: false, backdropPreview: "",
+                  saving: false, error: "" };
+    profEditing = true;
+    renderProfile();
+    const f = profileCard.querySelector("input[type=text]");
+    if (f) f.focus();
+}
+
+function discardDraftPreviews() {
+    if (!profDraft) return;
+    if (profDraft.avatarPreview) URL.revokeObjectURL(profDraft.avatarPreview);
+    if (profDraft.backdropPreview) URL.revokeObjectURL(profDraft.backdropPreview);
+}
+
+function cancelProfileEdit() {
+    discardDraftPreviews();
+    profEditing = false;
+    profDraft = null;
+    renderProfile();
+    refreshProfile(profOpen);
+}
+
+// Crop to the middle of the picture so it fills w x h, then squeeze it under maxBytes.
+async function cropPicture(file, w, h, maxBytes) {
+    if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
+    const src = await decodeImage(file);
+    const sw = src.naturalWidth || src.width;
+    const sh = src.naturalHeight || src.height;
+    if (!sw || !sh) throw new Error("Couldn't read that picture.");
+    const scale = Math.max(w / sw, h / sh);
+    const cw = w / scale, ch = h / scale;
+    const sx = (sw - cw) / 2, sy = (sh - ch) / 2;
+    let quality = 0.86, ow = w, oh = h;
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(ow);
+        canvas.height = Math.round(oh);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(src, sx, sy, cw, ch, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+        if (!blob) throw new Error("Couldn't process that picture.");
+        if (blob.size <= maxBytes) return blob;
+        if (quality > 0.5) quality -= 0.12; else { ow *= 0.85; oh *= 0.85; }
+    }
+    throw new Error("That picture is too detailed. Try a smaller one.");
+}
+
+async function chooseProfilePicture(kind, file) {
+    const d = profDraft;
+    if (!d || !file) return;
+    d.error = "";
+    try {
+        const blob = kind === "avatar"
+            ? await cropPicture(file, AVATAR_PX, AVATAR_PX, AVATAR_MAX_BYTES)
+            : await cropPicture(file, BACKDROP_W, BACKDROP_H, BACKDROP_MAX_BYTES);
+        if (d !== profDraft) return;                    // the card was closed meanwhile
+        if (d[kind + "Preview"]) URL.revokeObjectURL(d[kind + "Preview"]);
+        d[kind] = blob;
+        d[kind + "Gone"] = false;
+        d[kind + "Preview"] = URL.createObjectURL(blob);
+    } catch (err) {
+        d.error = err.message;
+    }
+    if (profEditing && d === profDraft) renderProfile();
+}
+
+function removeProfilePicture(kind) {
+    const d = profDraft;
+    if (d[kind + "Preview"]) URL.revokeObjectURL(d[kind + "Preview"]);
+    d[kind] = null;
+    d[kind + "Preview"] = "";
+    d[kind + "Gone"] = true;
+    renderProfile();
+}
+
+function filePicker(kind) {
+    const input = mk("input", "prof-file");
+    input.type = "file";
+    input.accept = "image/*";
+    input.addEventListener("change", () => {
+        const f = input.files && input.files[0];
+        input.value = "";
+        chooseProfilePicture(kind, f);
+    });
+    return input;
+}
+
+function toolButton(label, onClick, disabled) {
+    const b = mk("button", "btn small", label);
+    b.type = "button";
+    b.disabled = !!disabled;
+    b.addEventListener("click", onClick);
+    return b;
+}
+
+function renderProfileEdit(p) {
+    const d = profDraft;
+    const busy = d.saving;
+    const view = Object.assign({}, p, { color: d.color });
+
+    // what the card will show once saved: the new picture, or none if it is being removed
+    const bgUrl = d.backdropGone ? "" : (d.backdropPreview || p.backdropUrl);
+    const avUrl = d.avatarGone ? "" : (d.avatarPreview || p.avatarUrl);
+
+    const banner = mk("div", "prof-banner");
+    paintBanner(banner, view, bgUrl);
+    banner.append(makeCloseButton());
+    const bpick = filePicker("backdrop");
+    const tools = mk("div", "prof-banner-tools");
+    tools.append(toolButton("Change backdrop", () => bpick.click(), busy),
+                 toolButton("Remove", () => removeProfilePicture("backdrop"), busy || !bgUrl));
+    banner.append(tools, bpick);
+
+    const body = mk("form", "prof-body prof-form");
+    body.autocomplete = "off";
+    body.addEventListener("submit", (e) => { e.preventDefault(); saveProfile(); });
+
+    const top = mk("div", "prof-top");
+    const av = mk("div", "prof-avatar");
+    paintAvatar(av, view, avUrl);
+    top.append(av);
+    const thought = mk("input", "field");
+    thought.type = "text";
+    thought.maxLength = PROF.thought;
+    thought.value = d.thought;
+    thought.placeholder = "Thought bubble: what's on your mind?";
+    thought.setAttribute("aria-label", "Thought bubble");
+    thought.disabled = busy;
+    thought.addEventListener("input", () => { d.thought = thought.value; });
+    thought.style.marginTop = "12px";
+    top.append(thought);
+    body.append(top);
+
+    const apick = filePicker("avatar");
+    const atools = mk("div", "prof-tools");
+    atools.append(toolButton("Change picture", () => apick.click(), busy),
+                  toolButton("Remove picture", () => removeProfilePicture("avatar"), busy || !avUrl), apick);
+    body.append(atools);
+
+    body.append(mk("h2", "prof-name", p.name));
+
+    const bioLabel = mk("label", "", "About you");
+    const count = mk("span", "prof-count", d.bio.length + "/" + PROF.bio);
+    bioLabel.append(count);
+    const bio = mk("textarea", "field");
+    bio.maxLength = PROF.bio;
+    bio.value = d.bio;
+    bio.placeholder = "Tell people a little about yourself";
+    bio.disabled = busy;
+    bio.addEventListener("input", () => { d.bio = bio.value; count.textContent = bio.value.length + "/" + PROF.bio; });
+    bioLabel.htmlFor = bio.id = "profBio";
+    body.append(bioLabel, bio);
+
+    body.append(mk("div", "lbl", "Links (up to " + PROF.links + ")"));
+    d.links.forEach((row) => {
+        const wrap = mk("div", "prof-link-row");
+        const l = mk("input", "field");
+        l.type = "text";
+        l.maxLength = PROF.linkLabel;
+        l.placeholder = "Name";
+        l.value = row.l;
+        l.setAttribute("aria-label", "Link name");
+        l.disabled = busy;
+        l.addEventListener("input", () => { row.l = l.value; });
+        const u = mk("input", "field");
+        u.type = "text";
+        u.inputMode = "url";
+        u.maxLength = PROF.linkUrl;
+        u.placeholder = "https://example.com";
+        u.value = row.u;
+        u.setAttribute("aria-label", "Link address");
+        u.disabled = busy;
+        u.addEventListener("input", () => { row.u = u.value; });
+        wrap.append(l, u);
+        body.append(wrap);
+    });
+
+    body.append(mk("div", "lbl", "Card colour"));
+    const sw = mk("div", "swatches");
+    PROFILE_COLORS.forEach((c) => {
+        const b = mk("button", "swatch", c ? "" : "A");
+        b.type = "button";
+        b.disabled = busy;
+        b.style.background = c ? "#" + c : colorFor(p.name);
+        b.title = c ? "#" + c : "Automatic";
+        b.setAttribute("aria-label", c ? "Colour #" + c : "Automatic colour");
+        b.setAttribute("aria-pressed", String(d.color === c));
+        b.addEventListener("click", () => { d.color = c; renderProfile(); });
+        sw.append(b);
+    });
+    body.append(sw);
+
+    const err = mk("p", "prof-error", d.error);
+    err.hidden = !d.error;
+    err.setAttribute("role", "alert");
+    body.append(err);
+
+    const actions = mk("div", "prof-actions");
+    const save = mk("button", "btn blue small", busy ? "Saving…" : "Save");
+    save.type = "submit";
+    save.disabled = busy;
+    const cancel = toolButton("Cancel", cancelProfileEdit, busy);
+    actions.append(save, cancel);
+    body.append(actions);
+
+    profileCard.append(banner, body);
+}
+
+// Sends one picture to the server in small pieces (same idea as sending a chat picture).
+async function uploadProfilePicture(kind, blob) {
+    const data = await blobToBase64(blob);
+    const parts = [];
+    for (let i = 0; i < data.length; i += CHUNK_CHARS) parts.push(data.slice(i, i + CHUNK_CHARS));
+    if (parts.length < 1 || parts.length > 99) throw new Error("That picture is too big.");
+    if (!sendPacket("PFUH", myId, "", mySecret + "|" + kind + "|" + blob.type + "|" + parts.length)) throw new Error("Not connected.");
+    for (let i = 0; i < parts.length; i++) {
+        while (socket && socket.bufferedAmount > 256 * 1024) await sleep(20);
+        if (!sendPacket("PFUC", myId, "", i + "|" + parts[i])) throw new Error("Connection lost while sending.");
+        if (i % 3 === 2) await sleep(CHUNK_PACKET_DELAY_MS);
+    }
+}
+
+async function saveProfile() {
+    const d = profDraft;
+    if (!d || d.saving) return;
+
+    const links = [];
+    for (const row of d.links) {
+        const u = normalizeUrl(row.u);
+        if (!u) continue;
+        if (!/^https?:\/\/[^\s]+$/i.test(u) || u.length > PROF.linkUrl) {
+            d.error = "\"" + row.u.trim() + "\" doesn't look like a web address (it must start with http:// or https://, up to " + PROF.linkUrl + " characters).";
+            renderProfile();
+            return;
+        }
+        links.push({ l: row.l.trim(), u });
+    }
+    const enc = {
+        thought: encodeURIComponent(d.thought.trim().slice(0, PROF.thought)),
+        bio: encodeURIComponent(d.bio.trim().slice(0, PROF.bio)),
+        links: links.length ? encodeURIComponent(JSON.stringify(links)) : ""
+    };
+    for (const k of ["thought", "bio", "links"]) {
+        if (enc[k].length > PROF_ENC_MAX[k]) {
+            d.error = "Your " + (k === "links" ? "links are" : k === "bio" ? "bio is" : "thought bubble is") + " too long once saved. Please shorten it.";
+            renderProfile();
+            return;
+        }
+    }
+
+    d.saving = true;
+    d.error = "";
+    renderProfile();
+    try {
+        // the server answers PROFOK (or PROFERR) after PROFDONE
+        const ack = new Promise((resolve, reject) => {
+            profAck = { resolve, reject };
+            setTimeout(() => reject(new Error("The server didn't answer. Please try again.")), 20000);
+        });
+        ack.catch(() => { });
+        if (d.avatarGone) sendPacket("PFUDEL", myId, "", mySecret + "|avatar");
+        else if (d.avatar) await uploadProfilePicture("avatar", d.avatar);
+        if (d.backdropGone) sendPacket("PFUDEL", myId, "", mySecret + "|backdrop");
+        else if (d.backdrop) await uploadProfilePicture("backdrop", d.backdrop);
+        const send = (field, value) => {
+            if (!sendPacket("PROFF", myId, "", mySecret + "|" + field + "|" + value)) throw new Error("Not connected.");
+        };
+        send("thought", enc.thought);
+        send("bio", enc.bio);
+        send("links", enc.links);
+        send("color", d.color);
+        if (!sendPacket("PROFDONE", myId, "", mySecret)) throw new Error("Not connected.");
+        await ack;
+    } catch (err) {
+        profAck = null;
+        if (d === profDraft) {
+            d.saving = false;
+            d.error = err.message || "Couldn't save your profile.";
+            renderProfile();
+        }
+        return;
+    }
+    profAck = null;
+    if (d !== profDraft) return;           // closed while saving: the change is saved anyway
+    discardDraftPreviews();
+    profEditing = false;
+    profDraft = null;
+    const p = profiles.get(profOpen);
+    if (p) { p.loaded = true; }
+    renderProfile();
+    refreshProfile(profOpen);
+}
+
+function onProfileSaved() {
+    if (profAck) profAck.resolve();
+}
+
+function onProfileError(text) {
+    if (profAck) profAck.reject(new Error(text));
+    else addSystem("Couldn't save your profile: " + text, current);
+}
+
+// ----- ways in -----
+const userCard = document.querySelector(".usercard");
+userCard.addEventListener("click", (e) => {
+    if (!joined || e.target.closest("#logoutBtn")) return;
+    openProfile(myName);
+});
+$("meOpen").addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && joined) { e.preventDefault(); openProfile(myName); }
+});
+
 
 buildChannelList();
 renderChannelHeader();

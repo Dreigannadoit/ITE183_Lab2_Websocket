@@ -28,6 +28,22 @@ var server = http(8000);
 //     EDIT|id||secret|messageId|newText     (only the author may edit, see doEdit)
 //     DELETE|id||secret|messageId           (only the author may delete, see doDelete)
 //
+//     PROFGET|id||username                  (open somebody's profile card)
+//     PROFF|id||secret|field|value          (change one of YOUR profile fields: thought, bio, links, color)
+//     PROFDONE|id||secret                   (all fields sent: announce the change)
+//     PFUH|id||secret|kind|mime|packets     (start sending YOUR profile picture / backdrop; kind = avatar or backdrop)
+//     PFUC|id||index|data                   (one piece of that picture)
+//     PFUDEL|id||secret|kind                (remove YOUR profile picture / backdrop)
+//     PFGET|id||username|kind               (ask for somebody's profile picture / backdrop)
+//
+//   server -> that one client
+//     PROF|id|username|since|avatarVer|backdropVer|color|thought|links|bio   (text fields are URL-encoded)
+//     PROFNONE|id|username|                 (no such account)
+//     PROFOK|id||                           (your profile change was saved)
+//     PROFERR|id|message|                   (your profile change was refused)
+//     PFIH|id|username|kind|packets|mime    (a saved profile picture is on its way)
+//     PFIC|id|username|kind|index|data      (one piece of it)
+//     PFIERR|id|username|kind               (that picture doesn't exist)
 //   server -> that one client
 //     AUTHOK|id|username|                   (answer to SIGNUP, LOGIN and RESUME)
 //     AUTHERR|id|message|
@@ -42,6 +58,7 @@ var server = http(8000);
 //   server -> everyone (only the server may send these; a client that sends one is ignored)
 //     EDITED||username|channel|messageId|newText
 //     DELETED||username|channel|messageId
+//     PROFCHG||username|                    (that person changed their profile: refresh it)
 //
 // Anything else is a live chat packet and is broadcast to everyone, as before.
 //
@@ -337,6 +354,13 @@ function createTables() {
     // A saved picture is a set of rows, one per packet the browser sent (about 1500 characters of base64 each).
     dbExec("CREATE TABLE IF NOT EXISTS pictures (id INTEGER PRIMARY KEY AUTOINCREMENT, pic_id VARCHAR(24) NOT NULL, idx INTEGER NOT NULL, mime VARCHAR(16) NOT NULL, bytes INTEGER NOT NULL, chunk TEXT NOT NULL);");
     dbExec("CREATE INDEX IF NOT EXISTS idx_pictures_pic ON pictures (pic_id, idx);");
+
+    // Profile cards. Text fields are stored URL-encoded exactly as the browser sent them.
+    // avatar_ver / backdrop_ver are 0 when there is no picture and go up each time a new one is saved.
+    dbExec("CREATE TABLE IF NOT EXISTS profiles (user_id INTEGER PRIMARY KEY, thought TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '', links TEXT NOT NULL DEFAULT '', color VARCHAR(6) NOT NULL DEFAULT '', avatar_ver INTEGER NOT NULL DEFAULT 0, backdrop_ver INTEGER NOT NULL DEFAULT 0);");
+    // A profile picture / backdrop is a set of rows, one per packet (like the pictures table).
+    dbExec("CREATE TABLE IF NOT EXISTS profile_images (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, kind VARCHAR(8) NOT NULL, idx INTEGER NOT NULL, mime VARCHAR(16) NOT NULL, chunk TEXT NOT NULL);");
+    dbExec("CREATE INDEX IF NOT EXISTS idx_profile_images ON profile_images (user_id, kind, idx);");
 
     // one row per channel in CHANNELS
     var i = 0;
@@ -857,6 +881,269 @@ function doDelete(clientId, id, payload) {
     server.sendAll("DELETED||" + rows[0].username + "|" + rows[0].channel + "|" + mid);
 }
 
+// ------------------------------------------
+// PROFILES (the card that opens from the member list and from your own user card)
+// ------------------------------------------
+// Anybody logged in can READ any profile. Only the owner can CHANGE theirs: every change
+// packet must carry the login secret, and the server only ever writes to the row of the
+// logged-in user (never to a name taken from the packet).
+var PROF_THOUGHT_MAX = 300;     // limits on the URL-ENCODED text (the browser limits the plain text more tightly)
+var PROF_BIO_MAX = 900;
+var PROF_LINKS_MAX = 1400;
+var PROF_PIECE_MAX = 2000;      // characters in one piece of picture data
+var HEXCHARS = "0123456789abcdefABCDEF";
+
+var pfTab = [];       // tab id of an upload in progress ("" = free slot)
+var pfUser = [];
+var pfKind = [];
+var pfMime = [];
+var pfTotal = [];     // number of pieces, kept as text
+var pfGot = [];
+
+function kindOk(k) {
+    return k == "avatar" || k == "backdrop";
+}
+
+function userIdSql(name) {
+    return "(SELECT id FROM users WHERE username = " + sqlStr(name) + ")";
+}
+
+function ensureProfile(name) {
+    return dbExec("INSERT OR IGNORE INTO profiles (user_id) VALUES (" + userIdSql(name) + ");");
+}
+
+function findUpload(id) {
+    var i = 0;
+    while (i < sizeof(pfTab)) {
+        if (pfTab[i] == id) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+function freeUpload(i) {
+    pfTab[i] = "";
+}
+
+function newUploadSlot() {
+    var i = 0;
+    while (i < sizeof(pfTab)) {
+        if (pfTab[i] == "") {
+            return i;
+        }
+        i = i + 1;
+    }
+    return sizeof(pfTab);
+}
+
+// The logged-in session behind a change packet, or -1 (and PROFERR) if the secret is wrong.
+function profileSession(clientId, id, secret) {
+    var s = findSession(id);
+    if (s < 0) {
+        reply(clientId, "PROFERR", id, "Please log in again.", "");
+        return -1;
+    }
+    if (!secretOk(s, secret)) {
+        print("Profile change refused: wrong secret for " + sessName[s]);
+        reply(clientId, "PROFERR", id, "Please log out and back in, then try again.", "");
+        return -1;
+    }
+    return s;
+}
+
+// PROFGET|id||username  ->  PROF|id|username|since|avatarVer|backdropVer|color|thought|links|bio
+function doProfileGet(clientId, id, target) {
+    if (findSession(id) < 0) {
+        reply(clientId, "PROFNONE", id, target, "");
+        return;
+    }
+    var rows = dbQuery("SELECT u.username AS username, CAST(u.created_at AS TEXT) AS since, COALESCE(p.thought, '') AS thought, COALESCE(p.bio, '') AS bio, COALESCE(p.links, '') AS links, COALESCE(p.color, '') AS color, CAST(COALESCE(p.avatar_ver, 0) AS TEXT) AS av, CAST(COALESCE(p.backdrop_ver, 0) AS TEXT) AS bv "
+                       + "FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.username = " + sqlStr(target) + ";");
+    if (rowCount(rows) < 1) {
+        reply(clientId, "PROFNONE", id, target, "");
+        return;
+    }
+    var r = rows[0];
+    reply(clientId, "PROF", id, r.username, r.since + "|" + r.av + "|" + r.bv + "|" + r.color + "|" + r.thought + "|" + r.links + "|" + r.bio);
+}
+
+// PROFF|id||secret|field|value   (value is URL-encoded text; empty clears the field)
+function doProfField(clientId, id, payload) {
+    var a = parsePair(payload);             // secret | field|value
+    var s = profileSession(clientId, id, a[0]);
+    if (s < 0) {
+        return;
+    }
+    var b = parsePair(a[1]);                // field | value
+    var field = b[0];
+    var value = b[1];
+    if (field == "thought") {
+        if (sizeof(value) > PROF_THOUGHT_MAX) {
+            reply(clientId, "PROFERR", id, "Your thought bubble is too long.", "");
+            return;
+        }
+    }
+    else if (field == "bio") {
+        if (sizeof(value) > PROF_BIO_MAX) {
+            reply(clientId, "PROFERR", id, "Your bio is too long.", "");
+            return;
+        }
+    }
+    else if (field == "links") {
+        if (sizeof(value) > PROF_LINKS_MAX) {
+            reply(clientId, "PROFERR", id, "Your links are too long.", "");
+            return;
+        }
+    }
+    else if (field == "color") {
+        if (value != "") {
+            if (sizeof(value) != 6 || !onlyChars(value, HEXCHARS, 6)) {
+                reply(clientId, "PROFERR", id, "That colour isn't valid.", "");
+                return;
+            }
+        }
+    }
+    else {
+        reply(clientId, "PROFERR", id, "Unknown profile field.", "");
+        return;
+    }
+    ensureProfile(sessName[s]);
+    // `field` is one of the four names checked above, so it is safe to use as the column name
+    var ok = dbExec("UPDATE profiles SET " + field + " = " + sqlStr(value) + " WHERE user_id = " + userIdSql(sessName[s]) + ";");
+    if (!ok) {
+        reply(clientId, "PROFERR", id, "Could not save your profile. Check the server window.", "");
+    }
+}
+
+// PROFDONE|id||secret
+function doProfDone(clientId, id, secret) {
+    var s = profileSession(clientId, id, secret);
+    if (s < 0) {
+        return;
+    }
+    print("Profile updated by " + sessName[s]);
+    reply(clientId, "PROFOK", id, "", "");
+    server.sendAll("PROFCHG||" + sessName[s] + "|");
+}
+
+// PFUH|id||secret|kind|mime|packets
+function doPfHeader(clientId, id, payload) {
+    var a = parsePair(payload);             // secret | kind|mime|packets
+    var s = profileSession(clientId, id, a[0]);
+    if (s < 0) {
+        return;
+    }
+    var b = parsePair(a[1]);                // kind | mime|packets
+    var c = parsePair(b[1]);                // mime | packets
+    var kind = b[0];
+    var mime = c[0];
+    var total = c[1];
+    var old = findUpload(id);
+    if (old >= 0) {
+        freeUpload(old);                    // one upload at a time per tab: drop an unfinished one
+    }
+    if (!kindOk(kind) || !mimeOk(mime) || !onlyChars(total, DIGITS, 2) || total == "0") {
+        reply(clientId, "PROFERR", id, "That picture couldn't be sent.", "");
+        return;
+    }
+    ensureProfile(sessName[s]);
+    // the new picture replaces the old one as soon as it starts to arrive
+    dbExec("DELETE FROM profile_images WHERE kind = " + sqlStr(kind) + " AND user_id = " + userIdSql(sessName[s]) + ";");
+    var at = newUploadSlot();
+    pfTab[at] = id;
+    pfUser[at] = sessName[s];
+    pfKind[at] = kind;
+    pfMime[at] = mime;
+    pfTotal[at] = total;
+    pfGot[at] = 0;
+}
+
+// PFUC|id||index|data
+function doPfChunk(clientId, id, payload) {
+    var at = findUpload(id);
+    if (at < 0) {
+        return;
+    }
+    var k = indexOfChar(payload, "|", 0);
+    if (k < 0) {
+        freeUpload(at);
+        return;
+    }
+    var index = substr(payload, 0, k);
+    var piece = substr(payload, k + 1);
+    if (index != ("" + pfGot[at]) || sizeof(piece) > PROF_PIECE_MAX || sizeof(piece) < 1) {
+        print("Profile picture from " + pfUser[at] + " dropped: bad piece " + index);
+        dbExec("DELETE FROM profile_images WHERE kind = " + sqlStr(pfKind[at]) + " AND user_id = " + userIdSql(pfUser[at]) + ";");
+        reply(clientId, "PROFERR", id, "Your picture didn't arrive. Please try again.", "");
+        freeUpload(at);
+        return;
+    }
+    var stored = dbExec("INSERT INTO profile_images (user_id, kind, idx, mime, chunk) VALUES (" + userIdSql(pfUser[at]) + ", "
+                        + sqlStr(pfKind[at]) + ", " + pfGot[at] + ", " + sqlStr(pfMime[at]) + ", " + sqlStr(piece) + ");");
+    if (!stored) {
+        dbExec("DELETE FROM profile_images WHERE kind = " + sqlStr(pfKind[at]) + " AND user_id = " + userIdSql(pfUser[at]) + ";");
+        reply(clientId, "PROFERR", id, "Your picture couldn't be saved.", "");
+        freeUpload(at);
+        return;
+    }
+    pfGot[at] = pfGot[at] + 1;
+    if (("" + pfGot[at]) == pfTotal[at]) {
+        var col = "backdrop_ver";
+        if (pfKind[at] == "avatar") {
+            col = "avatar_ver";
+        }
+        dbExec("UPDATE profiles SET " + col + " = " + col + " + 1 WHERE user_id = " + userIdSql(pfUser[at]) + ";");
+        print("Saved profile " + pfKind[at] + " for " + pfUser[at] + " (" + pfTotal[at] + " pieces)");
+        freeUpload(at);
+    }
+}
+
+// PFUDEL|id||secret|kind
+function doPfDelete(clientId, id, payload) {
+    var a = parsePair(payload);             // secret | kind
+    var s = profileSession(clientId, id, a[0]);
+    if (s < 0) {
+        return;
+    }
+    var kind = a[1];
+    if (!kindOk(kind)) {
+        reply(clientId, "PROFERR", id, "Unknown picture type.", "");
+        return;
+    }
+    ensureProfile(sessName[s]);
+    dbExec("DELETE FROM profile_images WHERE kind = " + sqlStr(kind) + " AND user_id = " + userIdSql(sessName[s]) + ";");
+    var col = "backdrop_ver";
+    if (kind == "avatar") {
+        col = "avatar_ver";
+    }
+    dbExec("UPDATE profiles SET " + col + " = 0 WHERE user_id = " + userIdSql(sessName[s]) + ";");
+}
+
+// PFGET|id||username|kind  ->  PFIH|id|username|kind|packets|mime  then  PFIC|id|username|kind|index|data ...
+function doPfGet(clientId, id, payload) {
+    var a = parsePair(payload);             // username | kind
+    var target = a[0];
+    var kind = a[1];
+    if (findSession(id) < 0 || !kindOk(kind)) {
+        reply(clientId, "PFIERR", id, target, kind);
+        return;
+    }
+    var rows = dbQuery("SELECT mime, chunk FROM profile_images WHERE kind = " + sqlStr(kind) + " AND user_id = " + userIdSql(target) + " ORDER BY idx;");
+    var total = rowCount(rows);
+    if (total < 1) {
+        reply(clientId, "PFIERR", id, target, kind);
+        return;
+    }
+    reply(clientId, "PFIH", id, target, kind + "|" + total + "|" + rows[0].mime);
+    var i = 0;
+    while (i < total) {
+        reply(clientId, "PFIC", id, target, kind + "|" + i + "|" + rows[i].chunk);
+        i = i + 1;
+    }
+}
+
 createTables();
 upgradeTables();
 var cu = dbQuery("SELECT COUNT(*) AS n FROM users;");
@@ -964,6 +1251,38 @@ server.onData = function (message, clientId) {
     else if (type == "DELETE") {
         var dl = parsePacket(message);         // type, id, (name), secret|messageId
         doDelete(clientId, dl[1], dl[3]);
+    }
+    else if (type == "PROFGET") {
+        var pg = parsePacket(message);         // type, id, (name), username
+        doProfileGet(clientId, pg[1], pg[3]);
+    }
+    else if (type == "PROFF") {
+        var pf = parsePacket(message);         // type, id, (name), secret|field|value
+        doProfField(clientId, pf[1], pf[3]);
+    }
+    else if (type == "PROFDONE") {
+        var pd = parsePacket(message);         // type, id, (name), secret
+        doProfDone(clientId, pd[1], pd[3]);
+    }
+    else if (type == "PFUH") {
+        var uh = parsePacket(message);         // type, id, (name), secret|kind|mime|packets
+        doPfHeader(clientId, uh[1], uh[3]);
+    }
+    else if (type == "PFUC") {
+        var uc = parsePacket(message);         // type, id, (name), index|data
+        doPfChunk(clientId, uc[1], uc[3]);
+    }
+    else if (type == "PFUDEL") {
+        var ud = parsePacket(message);         // type, id, (name), secret|kind
+        doPfDelete(clientId, ud[1], ud[3]);
+    }
+    else if (type == "PFGET") {
+        var ug = parsePacket(message);         // type, id, (name), username|kind
+        doPfGet(clientId, ug[1], ug[3]);
+    }
+    else if (type == "PROFCHG" || type == "PROF" || type == "PROFNONE" || type == "PROFOK" || type == "PROFERR" || type == "PFIH" || type == "PFIC" || type == "PFIERR") {
+        // Only the server sends these. If a client sends one it is a fake: do not pass it on.
+        print("Ignored a fake " + type + " packet from client " + clientId);
     }
     else if (type == "EDITED" || type == "DELETED") {
         // Only the server sends these. If a client sends one it is a fake: do not pass it on.

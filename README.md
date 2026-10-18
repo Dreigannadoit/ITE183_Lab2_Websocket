@@ -17,6 +17,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 - **Chat history**: messages are saved in SQLite. The newest 100 messages per channel are loaded after login or a server restart.
 - **Picture sharing**: attach or drag-and-drop images (JPEG, PNG, GIF, WebP). They are compressed in the browser, sent in chunks, saved in the database and reloaded when they scroll into view.
 - **Typing indicator**: see who is typing in each channel.
+- **Profile cards**: click your own user card (bottom left) to see and edit your profile, or click any member in the panel to see theirs. A profile has a username, profile picture, backdrop, thought bubble, bio, up to 3 links and a card colour. Only you can change your own (see below).
 - **Member panel**: shows who is online and how many accounts are registered.
 - **Connection console**: a collapsible panel in the chat page that shows the raw packets, handy for debugging.
 - **Responsive layout**: works on phones and desktops.
@@ -39,6 +40,9 @@ TYPE|id|name|payload
 | `SAVE` | Store a chat message |
 | `EDIT` / `DELETE` | Edit or delete a saved message (author only, checked by the server) |
 | `IMGH` / `IMGC` / `IMGGET` | Send a picture (header, chunks) / request a saved picture |
+| `PROFGET` / `PFGET` | Open someone's profile card / fetch their profile picture or backdrop |
+| `PROFF` / `PROFDONE` | Change one of your own profile fields / finish and announce the change (`PROFCHG` goes to everybody) |
+| `PFUH` / `PFUC` / `PFUDEL` | Upload (header, pieces) or remove your profile picture or backdrop |
 
 Anything else is treated as live chat and broadcast to all connected clients. The server announces accepted edits and deletes to everyone with `EDITED` and `DELETED` packets, and ignores any client that tries to send those itself. The server replies to account and history requests only to the requesting client.
 
@@ -81,6 +85,12 @@ The server also ignores fake `EDITED` / `DELETED` announcements sent by clients,
 - Pictures can be deleted but not edited. Deleting a picture also removes its saved data from the database.
 - Messages saved before this feature existed get an id automatically the first time the new server starts (`old1`, `old2`, ...), so their authors can edit or delete them too. The two new columns are added to `chatterbox.db` automatically. Keep a copy of the database file first if you want a backup.
 - If you were logged in when the server was updated, log out and back in so your login gets its secret.
+
+### Profiles
+
+Profile text is saved in the `profiles` table and pictures in `profile_images` (both are created automatically the first time the new `app.bzg` starts; existing data is untouched). Text fields travel URL-encoded; the browser shrinks the picture to 160x160 and the backdrop to 600x200 (JPEG) before sending them in small pieces, like chat pictures.
+
+As with edit and delete, anyone logged in may **read** a profile, but every change packet must carry the login secret and the server only writes to the row of the logged-in user. Links are only shown if they are plain `http://` or `https://` addresses, and they open in a new tab.
 
 ### Project structure
 

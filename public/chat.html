@@ -51,11 +51,14 @@
                 <ul id="channelList" class="channel-list"></ul>
             </div>
             <div class="usercard">
-                <div id="meAvatar" class="avatar"></div>
-                <div class="who">
-                    <b id="meName"></b>
-                    <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span
-                            class="txt">Connecting</span></span>
+                <div id="meOpen" class="me-open" role="button" tabindex="0" aria-haspopup="dialog"
+                    title="View and edit your profile">
+                    <div id="meAvatar" class="avatar"></div>
+                    <div class="who">
+                        <b id="meName"></b>
+                        <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span
+                                class="txt">Connecting</span></span>
+                    </div>
                 </div>
                 <button id="logoutBtn" class="btn small" type="button" title="Log out">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
@@ -130,6 +133,11 @@
 
     <!-- ===================== JOIN POPUPS ("<name> joined the chat", bottom right) ===================== -->
     <div id="joinToasts" class="join-toasts" role="status" aria-live="polite"></div>
+
+    <!-- ===================== PROFILE CARD (opens from your user card or from a member) ===================== -->
+    <div id="profileModal" class="prof-modal" hidden>
+        <section id="profileCard" class="prof-card" role="dialog" aria-modal="true" aria-label="Profile"></section>
+    </div>
 
     <div id="lightbox" class="lightbox" hidden>
         <button id="lbClose" class="btn small" type="button">Close</button>
