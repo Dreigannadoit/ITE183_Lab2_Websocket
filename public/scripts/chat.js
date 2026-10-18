@@ -266,6 +266,7 @@ function connect() {
             // Connection came back: tell everyone we're still here.
             resetPeers();
             requestUsers();
+            rescanAvatars();
             sendPacket("HELLO", myId, myName, "re");
             if (!connToast.hidden) {
                 showConnToast("back", "Reconnected");
@@ -525,8 +526,7 @@ async function finishClaim() {
     joined = true;
     logLine("System", "Username accepted. Joined as " + myName + ".");
     $("meName").textContent = myName;
-    $("meAvatar").style.background = colorFor(myName);
-    $("meAvatar").textContent = myName.charAt(0).toUpperCase();
+    decorateAvatar($("meAvatar"), myName);
     resetPeers();
     showScreen("chat");
     setStatus(state);
@@ -571,9 +571,19 @@ function colorFor(name) {
 function makeAvatar(name) {
     const a = document.createElement("div");
     a.className = "avatar";
-    a.style.background = colorFor(name);
-    a.textContent = name.charAt(0).toUpperCase();
+    decorateAvatar(a, name);
     return a;
+}
+
+// Fills a round .avatar: the first letter on the user's colour, or their profile picture once we have it.
+// Pictures are fetched lazily, once per user, the first time an avatar for them is drawn (see the profile
+// section further down: wantAvatarPhoto / paintAvatarPhoto / refreshAvatars).
+function decorateAvatar(el, name) {
+    el.dataset.name = name.toLowerCase();
+    el.style.backgroundColor = colorFor(name);
+    el.textContent = name.charAt(0).toUpperCase();
+    paintAvatarPhoto(el, profiles.get(name.toLowerCase()));
+    wantAvatarPhoto(name);
 }
 
 function nearBottom() {
@@ -2022,6 +2032,52 @@ function hostOf(u) {
     try { return new URL(u).hostname.replace(/^www\./, ""); } catch (err) { return u; }
 }
 
+// ----- profile pictures on the small round avatars (messages, member list, your user card, mentions, popups) -----
+const avatarAsked = new Set();    // lower-case names we already asked the server about
+
+function paintAvatarPhoto(el, p) {
+    const url = p && p.avatarUrl;
+    if (url) {
+        el.style.backgroundImage = 'url("' + url + '")';
+        el.style.backgroundSize = "cover";
+        el.style.backgroundPosition = "center";
+        el.textContent = "";
+        el.classList.add("has-photo");
+    } else if (el.classList.contains("has-photo")) {
+        el.style.backgroundImage = "";
+        el.textContent = (el.dataset.name || "?").charAt(0).toUpperCase();
+        el.classList.remove("has-photo");
+    }
+}
+
+// Every avatar on the page that belongs to this user gets repainted (new picture, picture removed, ...).
+function refreshAvatars(key) {
+    const p = profiles.get(key);
+    document.querySelectorAll(".avatar[data-name]").forEach((el) => {
+        if (el.dataset.name === key) paintAvatarPhoto(el, p);
+    });
+}
+
+// Asks the server for the user's profile once (the reply carries the picture version, then the picture follows).
+function wantAvatarPhoto(name) {
+    const key = name.toLowerCase();
+    if (!joined || avatarAsked.has(key)) return;
+    let p = profiles.get(key);
+    if (p && p.loaded) return;
+    if (!p) { p = blankProfile(name); profiles.set(key, p); }
+    if (!sendPacket("PROFGET", myId, "", name)) return;     // not connected: rescanAvatars() tries again later
+    avatarAsked.add(key);
+    setTimeout(() => {                                       // no answer: allow another try
+        const q = profiles.get(key);
+        if (!q || !q.loaded) avatarAsked.delete(key);
+    }, PROF_WAIT_MS * 2);
+}
+
+function rescanAvatars() {
+    avatarAsked.clear();
+    document.querySelectorAll(".avatar[data-name]").forEach((el) => wantAvatarPhoto(el.dataset.name));
+}
+
 // ----- opening and closing -----
 function openProfile(name) {
     if (profClosing) finishClose();               // reopened while the old card was still leaving
@@ -2087,6 +2143,9 @@ function dropProfile(key) {
     if (!p) return;
     [p.avatarUrl, p.backdropUrl].forEach((u) => { if (u) URL.revokeObjectURL(u); });
     profiles.delete(key);
+    avatarAsked.delete(key);
+    refreshAvatars(key);              // back to the letter until the next fetch
+    wantAvatarPhoto(p.name);
 }
 
 // ----- messages from the server -----
@@ -2113,6 +2172,7 @@ function onProfile(m) {
             if (p[kind + "Url"]) URL.revokeObjectURL(p[kind + "Url"]);
             p[kind + "Url"] = "";
             p[kind + "Shown"] = 0;
+            if (kind === "avatar") refreshAvatars(key);
         } else if (p[kind + "Shown"] !== ver) {
             p[kind + "Shown"] = ver;          // asked for: the picture shows up when it arrives
             sendPacket("PFGET", myId, "", p.name + "|" + kind);
@@ -2133,8 +2193,10 @@ function onProfileChanged(name) {
     const key = name.toLowerCase();
     if (profOpen === key) {
         if (!profEditing) refreshProfile(key);   // while you are editing, the save refreshes it afterwards
-    } else {
-        dropProfile(key);
+    } else if (profiles.has(key)) {
+        // fetch again so their avatars update; the old picture stays until the new one arrives
+        // (sent directly: refreshProfile() would reset the open card's timer)
+        sendPacket("PROFGET", myId, "", profiles.get(key).name);
     }
 }
 
@@ -2172,6 +2234,7 @@ function onProfileImageChunk(m) {
         if (p[kind + "Url"]) URL.revokeObjectURL(p[kind + "Url"]);
         p[kind + "Url"] = url;
     } catch (err) { return; }
+    if (kind === "avatar") refreshAvatars(m.name.toLowerCase());
     if (profOpen === m.name.toLowerCase() && !profEditing) renderProfile();
 }
 
