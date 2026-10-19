@@ -19,6 +19,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 - **Typing indicator**: see who is typing in each channel.
 - **@mention suggestions**: type `@` in the message box to see everyone with an account (online first, then offline). Keep typing and the list narrows to matching names. Use Up/Down and Enter or Tab (or the mouse) to insert a name, Esc to close.
 - **Profile cards**: click your own user card (bottom left) to see and edit your profile, or click any member in the panel to see theirs. A profile has a username, profile picture, backdrop, thought bubble, bio, up to 3 links and a card colour. Only you can change your own (see below).
+- **Account settings**: change your username and / or password in a pop-up of its own (lock button next to Log out, or the **Account** button on your own profile card), separate from the profile card where you edit your bio, backdrop and picture. You must type your current password, and before anything is saved a second pop-up shows a summary ("alice -> Alicia", "password: new") and asks you to accept. Everybody sees your new username straight away.
 - **Member panel**: shows who is online and how many accounts are registered.
 - **Connection console**: a collapsible panel in the chat page that shows the raw packets, handy for debugging.
 - **Animated log in / sign up switch**: changing tabs plays a choreographed animation on the whole card: the tab fills with yellow from where you clicked and pops confetti, the mascot jumps and flips, the letters of BISCORD hop in a colour wave, the card lifts off its shadow, the tagline words fly out and in, and the form fields fly out one by one while the card springs to its new height. It can be interrupted at any time, and is skipped when the system has "reduce motion" turned on. The code is in `public/scripts/login.js`, the supporting styles at the end of `public/style.css`.
@@ -45,6 +46,7 @@ TYPE|id|name|payload
 | `PROFGET` / `PFGET` | Open someone's profile card / fetch their profile picture or backdrop |
 | `PROFF` / `PROFDONE` | Change one of your own profile fields / finish and announce the change (`PROFCHG` goes to everybody) |
 | `PFUH` / `PFUC` / `PFUDEL` | Upload (header, pieces) or remove your profile picture or backdrop |
+| `ACCTF` / `ACCTDO` | Account settings: send your current password, new username and new password (`ACCTF`, one field per packet), then apply them (`ACCTDO`). The server answers `ACCTOK` or `ACCTERR`, and announces a username change to everybody with `NAMECHG` |
 
 Anything else is treated as live chat and broadcast to all connected clients. The server announces accepted edits and deletes to everyone with `EDITED` and `DELETED` packets, and ignores any client that tries to send those itself. The server replies to account and history requests only to the requesting client.
 
@@ -94,6 +96,19 @@ The server also ignores fake `EDITED` / `DELETED` announcements sent by clients,
 Profile text is saved in the `profiles` table and pictures in `profile_images` (both are created automatically the first time the new `app.bzg` starts; existing data is untouched). Text fields travel URL-encoded; the browser shrinks the picture to 160x160 and the backdrop to 600x200 (JPEG) before sending them in small pieces, like chat pictures.
 
 As with edit and delete, anyone logged in may **read** a profile, but every change packet must carry the login secret and the server only writes to the row of the logged-in user. Links are only shown if they are plain `http://` or `https://` addresses, and they open in a new tab.
+
+### Account settings
+
+The pop-up is in `public/chat.html` (`#acctModal`, and `#acctConfirm` for the "Accept these changes?" step), the logic in the "ACCOUNT SETTINGS" section at the end of `public/scripts/chat.js`, the look in the "ACCOUNT SETTINGS" part at the end of `public/style.css`, and the server side in the "ACCOUNT SETTINGS" part of `app.bzg`.
+
+Nothing reaches the server until you press **Accept changes**. Then the browser sends `ACCTF|id||secret|cur|...`, `ACCTF|id||secret|name|...`, `ACCTF|id||secret|pw|...` (empty = unchanged) and `ACCTDO|id||secret`. The server checks, in this order:
+
+1. the packet carries the login secret (same rule as edit, delete and profile changes),
+2. the **current password** is right,
+3. a new username is 2 to 16 characters, has no `|` or space at either end, and is not taken by somebody else (changing only the capital letters of your own name is fine),
+4. a new password is 4 to 100 characters.
+
+Then it updates only the logged-in user's row of `users`. Messages, pictures and the profile belong to the account (user id), so they follow the new name. Every login of that account is renamed on the server, and `NAMECHG||old|new` makes every browser rename the person in the member list, the messages and the typing dots. You stay logged in: the login secret does not change. The passwords are never printed in the server window or the console, and clients cannot fake `ACCTOK`, `ACCTERR` or `NAMECHG`.
 
 ### Project structure
 

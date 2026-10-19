@@ -159,7 +159,7 @@ body {
     box-shadow: 10px 10px 0 var(--ink);
     animation: pop .5s cubic-bezier(.3, 1.6, .5, 1) both;
 }
-@keyframes pop { from { transform: scale(.7) rotate(-4deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes pop { from { transform: scale(.3) rotate(-84deg); opacity: 0; } to { transform:  scale(.91); opacity: 1; } }
 
 .mascot {
     position: absolute;
@@ -1667,3 +1667,169 @@ textarea#msgInput { flex: 1; min-width: 0; }
 .fx-front { z-index: 60; }
 .fx-ring { position: absolute; left: 0; top: 0; border-radius: 50%; border: 5px solid var(--ink); will-change: transform, opacity; }
 .fx-bit { position: absolute; left: 0; top: 0; border: 2px solid var(--ink); will-change: transform, opacity; }
+
+/* ------------------------------------------------------------
+   ACCOUNT SETTINGS  (username + password)
+   Its own pop-up, separate from the profile card (bio, backdrop, picture...). Opened with the lock button next to
+   Log out, or the "Account" button on your own profile card. Saving first opens a second pop-up on top
+   ("Accept these changes?") with a summary of what will change. Built from the profile-card pieces
+   (.prof-modal, .prof-card, .prof-btn, .prof-icon, .prof-error), so it opens and closes with the same animations.
+   chat.js: "ACCOUNT SETTINGS" section.
+------------------------------------------------------------ */
+.usercard .acct-btn { background: var(--sky); }
+.usercard .acct-btn svg { display: block; }
+
+.acct-modal { z-index: 46; }
+.acct-modal.acct-confirm { z-index: 47; }
+.acct-card { width: min(460px, 100%); }
+.acct-card.acct-card-sm { width: min(430px, 100%); }
+
+.acct-head {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    min-height: 76px;
+    padding: 14px 66px 14px 20px;
+    color: var(--white);
+    background-color: var(--purple);
+    background-image: radial-gradient(rgba(255, 255, 255, .28) 2px, transparent 2.5px);
+    background-size: 18px 18px;
+    border-bottom: 3px solid var(--prof-black);
+    border-radius: 19px 19px 0 0;
+}
+.acct-head.warn { background-color: var(--orange); }
+.acct-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    font-family: var(--prof-display);
+    font-weight: 400;
+    font-size: 28px;
+    line-height: 1.05;
+    letter-spacing: .4px;
+    text-shadow: 0 3px 0 var(--prof-black);
+}
+.acct-lock, .acct-badge {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    color: var(--prof-black);
+    background: var(--yellow);
+    border: 3px solid var(--prof-black);
+    border-radius: 50%;
+    box-shadow: 0 3px 0 var(--prof-black);
+    text-shadow: none;
+}
+.acct-lock svg { display: block; }
+.acct-badge { font-size: 26px; line-height: 1; padding-bottom: 2px; }
+
+.acct-form, .acct-body { padding-top: 2px; }
+.acct-intro { margin: 12px 0 0; font-size: 14px; font-weight: 600; line-height: 1.45; color: var(--prof-count); }
+
+.acct-sec {
+    margin-top: 12px;
+    padding: 8px 14px 12px;
+    background: #FFF9E8;
+    border: 3px solid var(--prof-black);
+    border-radius: 16px;
+    box-shadow: 0 4px 0 var(--prof-black);
+}
+.acct-sec h3 { margin: 0 0 2px; font-family: var(--prof-display); font-weight: 400; font-size: 20px; line-height: 1.2; letter-spacing: .3px; }
+.acct-form .acct-sec .lbl { margin: 10px 0 5px; font-size: 15px; }
+.acct-sec .field { width: 100%; background: var(--white); }
+.acct-sec .field + .lbl { margin-top: 12px; }
+.acct-now { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--prof-count); overflow-wrap: anywhere; }
+.acct-now b { color: var(--prof-black); }
+.acct-hint { margin: 5px 2px 0; font-size: 12px; font-weight: 600; color: #6b6585; }
+.acct-form .acct-check {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: fit-content;
+    margin: 14px 0 0;
+    font-family: var(--prof-text);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0;
+    cursor: pointer;
+}
+.acct-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); cursor: pointer; }
+
+/* the summary in the "Accept these changes?" pop-up */
+.acct-summary {
+    margin: 14px 0 0;
+    overflow: hidden;
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 16px;
+    box-shadow: 0 4px 0 var(--prof-black);
+}
+.acct-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: center; padding: 12px 14px; }
+.acct-row + .acct-row { border-top: 3px solid #E8E2D2; }
+.acct-key { font-family: var(--prof-display); font-size: 18px; line-height: 1.2; letter-spacing: .3px; }
+.acct-val { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.acct-chip { max-width: 100%; padding: 1px 11px 3px; font-weight: 700; background: #ECE8F4; border: 3px solid var(--prof-black); border-radius: 999px; }
+.acct-chip.old { color: #6b6585; text-decoration: line-through; text-decoration-thickness: 2px; }
+.acct-chip.new { background: var(--green); }
+.acct-arrow { font-family: var(--prof-display); font-size: 20px; line-height: 1; }
+.acct-same { font-weight: 600; color: #7d7590; }
+.acct-dots { font-size: 18px; letter-spacing: 2px; line-height: 1; }
+.acct-count { font-size: 12px; font-weight: 700; color: #6b6585; }
+.acct-tag { padding: 0 8px 1px; font-size: 12px; font-weight: 800; background: var(--yellow); border: 2px solid var(--prof-black); border-radius: 8px; }
+.acct-notes { margin: 14px 0 0; padding-left: 20px; font-size: 13.5px; font-weight: 600; line-height: 1.45; color: var(--prof-count); }
+.acct-notes li + li { margin-top: 4px; }
+
+.prof-btn.green { --face: #35D07F; --hi: #7BE5AE; --lo: #22A062; }
+.acct-body .prof-actions { margin-top: 18px; gap: 12px; }
+
+/* The form is tall: keep its buttons in view while the card scrolls */
+.acct-form .prof-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    margin: 14px -18px -22px;
+    padding: 12px 18px 18px;
+    background: var(--white);
+    border-top: 3px solid #E8E2D2;
+}
+
+/* the pieces fly in one after another when a pop-up opens (the --r number is set by chat.js) */
+.acct-modal:not([hidden]):not(.is-closing) .acct-sec,
+.acct-modal:not([hidden]):not(.is-closing) .acct-row,
+.acct-modal:not([hidden]):not(.is-closing) .acct-intro,
+.acct-modal:not([hidden]):not(.is-closing) .acct-notes,
+.acct-modal:not([hidden]):not(.is-closing) .prof-actions .prof-btn {
+    animation: prof-rise .6s cubic-bezier(.2, 1.2, .4, 1) backwards;
+    animation-delay: calc(.28s + var(--r, 0) * 80ms);
+}
+.acct-modal:not([hidden]):not(.is-closing) .acct-title { animation: prof-rise .6s cubic-bezier(.2, 1.4, .4, 1) .22s backwards; }
+.acct-modal:not([hidden]):not(.is-closing) .acct-lock,
+.acct-modal:not([hidden]):not(.is-closing) .acct-badge { animation: acct-pop .7s cubic-bezier(.2, 1.7, .4, 1) .3s backwards; }
+@keyframes acct-pop {
+    from { opacity: 0; transform: scale(.2) rotate(-40deg); }
+}
+
+/* "Username updated" popup (bottom right, shares the stack with the join popups) */
+.join-toast.acct-toast { padding-left: 8px; background: var(--green); }
+.acct-done { position: relative; flex: none; width: 30px; height: 30px; background: var(--white); border: 3px solid var(--ink); border-radius: 50%; }
+.acct-done::after {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 2px;
+    width: 7px;
+    height: 13px;
+    border: solid var(--ink);
+    border-width: 0 3px 3px 0;
+    border-radius: 1px;
+    transform: rotate(40deg);
+}
+
+@media (max-width: 480px) {
+    .acct-title { font-size: 24px; }
+    .acct-row { grid-template-columns: 1fr; gap: 6px; }
+}

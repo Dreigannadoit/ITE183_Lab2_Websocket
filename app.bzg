@@ -38,6 +38,8 @@ var server = http(8000);
 //     PFUH|id||secret|kind|mime|packets     (start sending YOUR profile picture / backdrop; kind = avatar or backdrop)
 //     PFUC|id||index|data                   (one piece of that picture)
 //     PFUDEL|id||secret|kind                (remove YOUR profile picture / backdrop)
+//     ACCTF|id||secret|field|value          (account settings: field = cur (current password), name (new username), pw (new password))
+//     ACCTDO|id||secret                     (all three sent: check the current password, then apply the change)
 //     PFGET|id||username|kind               (ask for somebody's profile picture / backdrop)
 //
 //   server -> that one client
@@ -63,6 +65,7 @@ var server = http(8000);
 //     EDITED||username|channel|messageId|newText
 //     DELETED||username|channel|messageId
 //     PROFCHG||username|                    (that person changed their profile: refresh it)
+//     NAMECHG||oldName|newName              (that person changed their username: rename them everywhere)
 //
 // Anything else is a live chat packet and is broadcast to everyone, as before.
 //
@@ -93,6 +96,9 @@ var DB_FILE = "database/chatterbox.db";
 var sessId = [];        // browser tab id that logged in
 var sessName = [];      // ...and the username it logged in as
 var sessSecret = [];    // ...and the secret that tab proved at login (never broadcast)
+var acctCur = [];       // account settings being sent by that login (ACCTF): current password,
+var acctName = [];      // ...the new username ("" = keep it),
+var acctPw = [];        // ...and the new password ("" = keep it). Cleared as soon as ACCTDO is handled.
 
 // ------------------------------------------
 // SMALL HELPERS
@@ -238,6 +244,23 @@ function reply(clientId, type, id, name, payload) {
     server.send(clientId, type + "|" + id + "|" + name + "|" + payload);
 }
 
+// Makes sure the three account-settings lists have a slot for session s (does not change what is in them).
+function ensureAcct(s) {
+    while (sizeof(acctCur) <= s) {
+        acctCur[sizeof(acctCur)] = "";
+        acctName[sizeof(acctName)] = "";
+        acctPw[sizeof(acctPw)] = "";
+    }
+}
+
+// Forgets any half-sent account change (and the passwords in it) of session slot s.
+function clearAcct(s) {
+    ensureAcct(s);
+    acctCur[s] = "";
+    acctName[s] = "";
+    acctPw[s] = "";
+}
+
 function findSession(id) {
     if (id == "") {
         return -1;          // "" marks a free slot, never a real login
@@ -257,6 +280,7 @@ function startSession(id, name, secret) {
     if (at >= 0) {
         sessName[at] = name;
         sessSecret[at] = secret;
+        clearAcct(at);
         return;
     }
     // reuse a slot freed by a log out, otherwise add a new one
@@ -266,6 +290,7 @@ function startSession(id, name, secret) {
             sessId[i] = id;
             sessName[i] = name;
             sessSecret[i] = secret;
+            clearAcct(i);
             return;
         }
         i = i + 1;
@@ -273,6 +298,7 @@ function startSession(id, name, secret) {
     sessId[sizeof(sessId)] = id;
     sessName[sizeof(sessName)] = name;
     sessSecret[sizeof(sessSecret)] = secret;
+    clearAcct(sizeof(sessId) - 1);
 }
 
 function endSession(id) {
@@ -281,6 +307,7 @@ function endSession(id) {
         sessId[at] = "";
         sessName[at] = "";
         sessSecret[at] = "";
+        clearAcct(at);
     }
 }
 
@@ -1148,6 +1175,187 @@ function doPfGet(clientId, id, payload) {
     }
 }
 
+// ------------------------------------------
+// ACCOUNT SETTINGS (change your username and / or password)
+// ------------------------------------------
+// The browser sends the pieces one at a time (ACCTF = "account field"; the value is the rest of the packet, so a
+// password may contain any character, even "|"), then ACCTDO. Nothing is changed until ACCTDO arrives, and then:
+//   1. the packet must carry the login secret (same rule as edit / delete / profile changes),
+//   2. the CURRENT password must be right (even with a valid login, nobody can change the password or name
+//      of an account they only have open on an unattended screen),
+//   3. a new username must be 2..16 characters, free, and without "|" or spaces at either end,
+//   4. a new password must be 4..100 characters.
+// The server only ever changes the row of the logged-in user. Messages, pictures and the profile belong to the
+// account (user id), not to the name, so they simply follow the new username. Every other login of the same
+// account is renamed too, and NAMECHG tells all browsers to show the new name.
+var ACCT_PW_MIN = 4;
+var ACCT_PW_MAX = 100;
+
+function acctFail(clientId, id, text) {
+    reply(clientId, "ACCTERR", id, text, "");
+}
+
+// ACCTF|id||secret|field|value
+function doAcctField(clientId, id, payload) {
+    var a = parsePair(payload);             // secret | field|value
+    var s = findSession(id);
+    if (s < 0) {
+        acctFail(clientId, id, "Please log in again.");
+        return;
+    }
+    if (!secretOk(s, a[0])) {
+        print("Account change refused: wrong secret for " + sessName[s]);
+        acctFail(clientId, id, "Please log out and back in, then try again.");
+        return;
+    }
+    var b = parsePair(a[1]);                // field | value
+    var field = b[0];
+    var value = b[1];
+    if (sizeof(value) > ACCT_PW_MAX) {
+        acctFail(clientId, id, "That is too long.");
+        return;
+    }
+    ensureAcct(s);
+    if (field == "cur") {
+        acctCur[s] = value;
+    }
+    else if (field == "name") {
+        acctName[s] = value;
+    }
+    else if (field == "pw") {
+        acctPw[s] = value;
+    }
+    else {
+        acctFail(clientId, id, "Unknown account field.");
+    }
+}
+
+// ACCTDO|id||secret
+function doAcctDone(clientId, id, secret) {
+    var s = findSession(id);
+    if (s < 0) {
+        acctFail(clientId, id, "Please log in again.");
+        return;
+    }
+    if (!secretOk(s, secret)) {
+        print("Account change refused: wrong secret for " + sessName[s]);
+        acctFail(clientId, id, "Please log out and back in, then try again.");
+        return;
+    }
+    ensureAcct(s);
+    var cur = acctCur[s];
+    var newName = acctName[s];
+    var newPw = acctPw[s];
+    clearAcct(s);                           // whatever happens next, the passwords are not kept
+
+    var oldName = sessName[s];
+    var rows = dbQuery("SELECT username, password FROM users WHERE username = " + sqlStr(oldName) + ";");
+    if (rowCount(rows) < 1) {
+        acctFail(clientId, id, "Couldn't find your account.");
+        return;
+    }
+    if (rows[0].password != cur) {
+        print("Account change refused: wrong current password for " + oldName);
+        acctFail(clientId, id, "Your current password is wrong.");
+        return;
+    }
+
+    var wantName = false;
+    if (newName != "") {
+        if (sizeof(newName) < 2 || sizeof(newName) > 16) {
+            acctFail(clientId, id, "Username needs 2 to 16 characters.");
+            return;
+        }
+        if (indexOfChar(newName, "|", 0) >= 0 || newName[0] == " " || newName[sizeof(newName) - 1] == " ") {
+            acctFail(clientId, id, "That username can't be used. Avoid the | character and spaces at the start or end.");
+            return;
+        }
+        if (newName != rows[0].username) {
+            // The username column ignores upper / lower case, so "!=" here skips your own row:
+            // changing only the capital letters of your own name is allowed.
+            var taken = dbQuery("SELECT id FROM users WHERE username = " + sqlStr(newName) + " AND username != " + sqlStr(oldName) + ";");
+            if (rowCount(taken) > 0) {
+                acctFail(clientId, id, "That username is already taken.");
+                return;
+            }
+            wantName = true;
+        }
+    }
+
+    var wantPw = false;
+    if (newPw != "") {
+        if (sizeof(newPw) < ACCT_PW_MIN || sizeof(newPw) > ACCT_PW_MAX) {
+            acctFail(clientId, id, "Your new password needs " + ACCT_PW_MIN + " to " + ACCT_PW_MAX + " characters.");
+            return;
+        }
+        if (newPw != cur) {
+            wantPw = true;
+        }
+    }
+
+    if (!wantName && !wantPw) {
+        acctFail(clientId, id, "There is nothing to change.");
+        return;
+    }
+
+    var sets = "";
+    if (wantName) {
+        sets = "username = " + sqlStr(newName);
+    }
+    if (wantPw) {
+        if (sets != "") {
+            sets = sets + ", ";
+        }
+        sets = sets + "password = " + sqlStr(newPw);
+    }
+    var ok = dbExec("UPDATE users SET " + sets + " WHERE username = " + sqlStr(oldName) + ";");
+    if (!ok) {
+        acctFail(clientId, id, "Couldn't save your changes. Check the server window.");
+        return;
+    }
+
+    var flags = "";
+    if (wantName) {
+        flags = "n";
+        // every login of this account (other tabs too) now carries the new name
+        var i1 = 0;
+        while (i1 < sizeof(sessName)) {
+            if (sessName[i1] == oldName) {
+                sessName[i1] = newName;
+            }
+            i1 = i1 + 1;
+        }
+        // ...and so do pictures that are still arriving
+        var i2 = 0;
+        while (i2 < sizeof(pendUser)) {
+            if (pendUser[i2] == oldName) {
+                pendUser[i2] = newName;
+            }
+            i2 = i2 + 1;
+        }
+        var i3 = 0;
+        while (i3 < sizeof(pfUser)) {
+            if (pfUser[i3] == oldName) {
+                pfUser[i3] = newName;
+            }
+            i3 = i3 + 1;
+        }
+    }
+    if (wantPw) {
+        flags = flags + "p";
+    }
+
+    var shown = oldName;
+    if (wantName) {
+        shown = newName;
+    }
+    print("Account updated: " + oldName + " (" + flags + ")" + " -> " + shown);
+    reply(clientId, "ACCTOK", id, shown, flags);
+    if (wantName) {
+        server.sendAll("NAMECHG||" + oldName + "|" + newName);
+    }
+}
+
 createTables();
 upgradeTables();
 var cu = dbQuery("SELECT COUNT(*) AS n FROM users;");
@@ -1271,6 +1479,14 @@ server.onData = function (message, clientId) {
         var pd = parsePacket(message);         // type, id, (name), secret
         doProfDone(clientId, pd[1], pd[3]);
     }
+    else if (type == "ACCTF") {
+        var af = parsePacket(message);         // type, id, (name), secret|field|value   (never printed: holds passwords)
+        doAcctField(clientId, af[1], af[3]);
+    }
+    else if (type == "ACCTDO") {
+        var ad = parsePacket(message);         // type, id, (name), secret
+        doAcctDone(clientId, ad[1], ad[3]);
+    }
     else if (type == "PFUH") {
         var uh = parsePacket(message);         // type, id, (name), secret|kind|mime|packets
         doPfHeader(clientId, uh[1], uh[3]);
@@ -1287,7 +1503,7 @@ server.onData = function (message, clientId) {
         var ug = parsePacket(message);         // type, id, (name), username|kind
         doPfGet(clientId, ug[1], ug[3]);
     }
-    else if (type == "PROFCHG" || type == "PROF" || type == "PROFNONE" || type == "PROFOK" || type == "PROFERR" || type == "PFIH" || type == "PFIC" || type == "PFIERR") {
+    else if (type == "PROFCHG" || type == "PROF" || type == "PROFNONE" || type == "PROFOK" || type == "PROFERR" || type == "PFIH" || type == "PFIC" || type == "PFIERR" || type == "ACCTOK" || type == "ACCTERR" || type == "NAMECHG") {
         // Only the server sends these. If a client sends one it is a fake: do not pass it on.
         print("Ignored a fake " + type + " packet from client " + clientId);
     }

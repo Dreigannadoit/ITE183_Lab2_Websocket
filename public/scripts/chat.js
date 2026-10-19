@@ -308,7 +308,7 @@ function connect() {
         const m = parse(data);
         // Profile packets are only ever sent by the server to one tab. A copy that came wrapped as
         // "User <n> says: ..." was relayed from another client, so it is a fake and is ignored.
-        if (wrapped && /^(PROF|PF)/.test(m.type)) return;
+        if (wrapped && /^(PROF|PF|ACCT|NAMECHG)/.test(m.type)) return;
         if (handleServerReply(m)) return;
         if (QUIET_TYPES.indexOf(m.type) < 0) {
             if (m.type === "MSG") {
@@ -330,6 +330,11 @@ function connect() {
         }
         if (m.type === "PROFCHG") {
             if (!wrapped && joined) onProfileChanged(m.name);
+            return;
+        }
+        // NAMECHG||oldName|newName: somebody (maybe you, on another tab) changed their username
+        if (m.type === "NAMECHG") {
+            if (!wrapped && joined) onNameChanged(m.name, m.payload);
             return;
         }
 
@@ -1695,6 +1700,8 @@ function handleServerReply(m) {
     if (m.type === "PFIH") { onProfileImageHeader(m); return true; }
     if (m.type === "PFIC") { onProfileImageChunk(m); return true; }
     if (m.type === "PFIERR") { onProfileImageMissing({ name: m.name, payload: m.payload }); return true; }
+    if (m.type === "ACCTOK") { onAcctOk(m); return true; }
+    if (m.type === "ACCTERR") { onAcctError(m.name); return true; }
     if (m.type === "EDITERR" || m.type === "DELETEERR") {
         // name = the reason
         const what = m.type === "EDITERR" ? "edit" : "delete";
@@ -2558,6 +2565,11 @@ function renderProfileView(p) {
         edit.type = "button";
         edit.addEventListener("click", startProfileEdit);
         actions.append(edit);
+        const account = mk("button", "prof-btn", "Account");
+        account.type = "button";
+        account.title = "Change your username or password";
+        account.addEventListener("click", () => { closeProfile(); openAccount($("meOpen")); });
+        actions.append(account);
     } else {
         const mention = mk("button", "prof-btn blue", "Mention @" + p.name);
         mention.type = "button";
@@ -2974,7 +2986,7 @@ function onProfileError(text) {
 // ----- ways in -----
 const userCard = document.querySelector(".usercard");
 userCard.addEventListener("click", (e) => {
-    if (!joined || e.target.closest("#logoutBtn")) return;
+    if (!joined || e.target.closest("#logoutBtn, #acctBtn")) return;
     openProfile(myName);
 });
 $("meOpen").addEventListener("keydown", (e) => {
@@ -2987,3 +2999,467 @@ renderChannelHeader();
 updateBadges();
 renderChannel();
 if (stored) connect();
+
+// ==========================================================
+// ACCOUNT SETTINGS: change your username and / or your password
+// ==========================================================
+// A pop-up of its own, separate from the profile card (bio, backdrop, picture...), because this is sensitive:
+//   1. #acctModal         the form: new username, new password (twice) and your CURRENT password.
+//   2. #acctConfirm       opens on top when you press "Review changes": a summary of what will change and
+//                         "Accept changes" / "Go back". Nothing is sent to the server before you accept.
+// Accepting sends ACCTF packets (cur / name / pw) and ACCTDO. The server answers ACCTOK or ACCTERR. After a
+// username change it tells every browser with NAMECHG||old|new, and onNameChanged() renames you everywhere
+// (member list, messages, typing dots...). You stay logged in: the login secret doesn't change.
+// The look is in style.css under "ACCOUNT SETTINGS" and reuses the profile card's animations.
+const ACCT = { nameMin: 2, nameMax: 16, pwMin: 4, pwMax: 100 };
+const ACCT_OUT_MS = 440;           // how long the closing animation runs before a pop-up is hidden
+const ACCT_WAIT_MS = 20000;        // how long we wait for the server to answer
+const acctModal = $("acctModal"), acctCard = $("acctCard");
+const acctConfirm = $("acctConfirm"), acctConfirmCard = $("acctConfirmCard");
+const LOCK_SVG = '<svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true"><rect x="2.5" y="7" width="11" height="7.5" rx="1.8" fill="currentColor"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+
+let acctFields = null;       // the inputs of the open form: { name, pw, pw2, cur, error, review }
+let acctUi = null;           // the buttons of the confirm pop-up: { accept, back }
+let acctPending = null;      // what is waiting for "Accept": { name, pw, cur } ("" = unchanged)
+let acctOpener = null;       // what had focus before the pop-up opened
+let acctBusy = false;        // true while the server is saving
+let acctAck = null;          // { resolve, reject } while a save waits for the server
+let acctAckTimer = null;
+let acctCloseTimer = null, acctConfirmTimer = null;
+
+// ----- the form -----
+function openAccount(opener) {
+    if (!joined || !acctModal.hidden) return;
+    clearTimeout(acctCloseTimer);
+    acctOpener = opener || document.activeElement;
+    acctBusy = false;
+    acctPending = null;
+    renderAccount();
+    acctModal.classList.remove("is-closing");
+    acctModal.hidden = false;
+    acctFields.name.focus({ preventScroll: true });
+}
+
+function acctInput(id, type, placeholder, maxLength, autocomplete) {
+    const i = mk("input", "field");
+    i.id = id;
+    i.type = type;
+    i.placeholder = placeholder;
+    i.maxLength = maxLength;
+    i.autocomplete = autocomplete;
+    i.spellcheck = false;
+    i.setAttribute("autocapitalize", "off");
+    return i;
+}
+
+function acctLabel(forId, text) {
+    const l = mk("label", "lbl", text);
+    l.htmlFor = forId;
+    return l;
+}
+
+function renderAccount() {
+    acctCard.replaceChildren();
+
+    const head = mk("div", "acct-head");
+    const title = mk("h2", "acct-title");
+    title.id = "acctTitle";
+    const lock = mk("span", "acct-lock");
+    lock.innerHTML = LOCK_SVG;
+    title.append(lock, "Account Settings");
+    const tools = mk("div", "prof-banner-tools");
+    tools.append(iconButton("close", "Close account settings", closeAccount, { end: true }));
+    head.append(title, tools);
+    acctCard.setAttribute("aria-labelledby", "acctTitle");
+    acctCard.removeAttribute("aria-label");
+
+    const form = mk("form", "prof-body prof-form acct-form");
+    form.autocomplete = "off";
+    form.noValidate = true;
+    form.addEventListener("submit", (e) => { e.preventDefault(); reviewAccount(); });
+    form.addEventListener("input", acctClearError);
+
+    let row = 1;
+    const section = (...kids) => {
+        const sec = mk("section", "acct-sec");
+        sec.style.setProperty("--r", row++);
+        sec.append(...kids);
+        return sec;
+    };
+
+    const intro = mk("p", "acct-intro", "Update your sign-in details here. Before anything is saved you'll see a summary and be asked to accept it.");
+
+    // username
+    const now = mk("p", "acct-now");
+    now.append("You are signed in as ", mk("b", "", myName), ".");
+    const name = acctInput("acctName", "text", "New username (leave empty to keep)", ACCT.nameMax, "off");
+    const nameSec = section(mk("h3", "", "Username"), now, acctLabel("acctName", "New username"), name,
+        mk("p", "acct-hint", ACCT.nameMin + " to " + ACCT.nameMax + " characters."));
+
+    // password
+    const pw = acctInput("acctPw", "password", "New password (leave empty to keep)", ACCT.pwMax, "new-password");
+    const pw2 = acctInput("acctPw2", "password", "Type the new password again", ACCT.pwMax, "new-password");
+    const pwSec = section(mk("h3", "", "Password"), acctLabel("acctPw", "New password"), pw,
+        acctLabel("acctPw2", "Confirm new password"), pw2,
+        mk("p", "acct-hint", "At least " + ACCT.pwMin + " characters."));
+
+    // proof that it is you
+    const cur = acctInput("acctCur", "password", "Your current password", ACCT.pwMax, "current-password");
+    const curSec = section(mk("h3", "", "Is it really you?"), acctLabel("acctCur", "Current password"), cur,
+        mk("p", "acct-hint", "Needed for any change, even if you only change your username."));
+
+    // show / hide the three password boxes
+    const showRow = mk("label", "acct-check");
+    const show = mk("input");
+    show.type = "checkbox";
+    show.addEventListener("change", () => {
+        [pw, pw2, cur].forEach((f) => { f.type = show.checked ? "text" : "password"; });
+    });
+    showRow.append(show, mk("span", "", "Show passwords"));
+
+    const error = mk("div", "prof-error");
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+
+    const actions = mk("div", "prof-actions");
+    const review = mk("button", "prof-btn blue", "Review changes");
+    review.type = "submit";
+    review.style.setProperty("--r", 4);
+    const cancel = mk("button", "prof-btn", "Cancel");
+    cancel.type = "button";
+    cancel.style.setProperty("--r", 5);
+    cancel.addEventListener("click", closeAccount);
+    actions.append(review, cancel);
+
+    form.append(intro, nameSec, pwSec, curSec, showRow, error, actions);
+    acctCard.append(head, form);
+    acctFields = { name, pw, pw2, cur, error, review };
+}
+
+function acctShowError(text, focusEl) {
+    if (!acctFields) return;
+    const e = acctFields.error;
+    e.hidden = true;                // hide, then show again, so the shake plays every time
+    void e.offsetWidth;
+    e.textContent = text;
+    e.hidden = false;
+    if (focusEl) focusEl.focus({ preventScroll: true });
+}
+
+function acctClearError() {
+    if (acctFields) acctFields.error.hidden = true;
+}
+
+// "Review changes": check everything here first, then ask the user to accept.
+function reviewAccount() {
+    if (acctBusy || !acctFields) return;
+    const F = acctFields;
+    const name = F.name.value.trim();
+    const pw = F.pw.value;
+    const pw2 = F.pw2.value;
+    const cur = F.cur.value;
+    const nameChanged = name !== "" && name !== myName;
+    const pwChanged = pw !== "";
+
+    if (!nameChanged && !pwChanged) {
+        acctShowError(name !== "" ? "That is already your username. Type a different one, or choose a new password."
+                                  : "Type a new username, a new password, or both.", F.name);
+        return;
+    }
+    if (nameChanged) {
+        if (name.length < ACCT.nameMin || name.length > ACCT.nameMax) { acctShowError("Username needs " + ACCT.nameMin + " to " + ACCT.nameMax + " characters.", F.name); return; }
+        if (name.indexOf("|") >= 0) { acctShowError("Usernames can't contain the | character.", F.name); return; }
+        if (registered.has(name.toLowerCase()) && !same(name, myName)) { acctShowError("That username is already taken.", F.name); return; }
+    }
+    if (pwChanged) {
+        if (pw.length < ACCT.pwMin) { acctShowError("Your new password needs at least " + ACCT.pwMin + " characters.", F.pw); return; }
+        if (pw !== pw2) { acctShowError("The two new passwords don't match.", F.pw2); return; }
+    }
+    if (cur === "") { acctShowError("Type your current password so we know it's you.", F.cur); return; }
+    if (pwChanged && pw === cur) { acctShowError("Your new password must be different from your current one.", F.pw); return; }
+
+    acctPending = { name: nameChanged ? name : "", pw: pwChanged ? pw : "", cur };
+    openAcctConfirm();
+}
+
+function closeAccount() {
+    if (acctModal.hidden || acctModal.classList.contains("is-closing") || acctBusy) return;
+    acctPending = null;
+    if (acctOpener && acctOpener.focus && acctOpener.isConnected) { try { acctOpener.focus({ preventScroll: true }); } catch (err) { } }
+    acctOpener = null;
+    if (PROF_REDUCED.matches) { finishAcctClose(); return; }
+    acctModal.classList.add("is-closing");
+    clearTimeout(acctCloseTimer);
+    acctCloseTimer = setTimeout(finishAcctClose, ACCT_OUT_MS);
+}
+
+function finishAcctClose() {
+    clearTimeout(acctCloseTimer);
+    acctModal.hidden = true;
+    acctModal.classList.remove("is-closing");
+    acctCard.replaceChildren();      // the typed passwords leave with the form
+    acctFields = null;
+}
+
+acctModal.addEventListener("mousedown", (e) => { if (e.target === acctModal) closeAccount(); });
+
+// ----- "Accept these changes?" -----
+function openAcctConfirm() {
+    if (!acctPending) return;
+    clearTimeout(acctConfirmTimer);
+    renderAcctConfirm();
+    acctConfirm.classList.remove("is-closing");
+    acctConfirm.hidden = false;
+    acctUi.back.focus({ preventScroll: true });     // Enter right after "Review changes" must not accept by accident
+}
+
+function renderAcctConfirm() {
+    const c = acctPending;
+    acctConfirmCard.replaceChildren();
+
+    const head = mk("div", "acct-head warn");
+    const title = mk("h2", "acct-title");
+    title.id = "acctConfirmTitle";
+    title.append(mk("span", "acct-badge", "!"), "Accept these changes?");
+    head.append(title);
+    acctConfirmCard.setAttribute("aria-labelledby", "acctConfirmTitle");
+    acctConfirmCard.removeAttribute("aria-label");
+
+    const body = mk("div", "prof-body acct-body");
+    const intro = mk("p", "acct-intro", "Please check the summary below. Nothing is saved until you accept.");
+
+    // the summary: one row per thing that can change
+    const summary = mk("div", "acct-summary");
+    summary.setAttribute("role", "list");
+    const nameRow = mk("div", "acct-row");
+    nameRow.setAttribute("role", "listitem");
+    nameRow.style.setProperty("--r", 1);
+    nameRow.append(mk("span", "acct-key", "Username"));
+    const nameVal = mk("span", "acct-val");
+    if (c.name) {
+        const arrow = mk("span", "acct-arrow", "\u2192");
+        arrow.setAttribute("aria-label", "changes to");
+        nameVal.append(mk("span", "acct-chip old", myName), arrow, mk("span", "acct-chip new", c.name));
+    } else {
+        nameVal.append(mk("span", "acct-same", "No change"));
+    }
+    nameRow.append(nameVal);
+
+    const pwRow = mk("div", "acct-row");
+    pwRow.setAttribute("role", "listitem");
+    pwRow.style.setProperty("--r", 2);
+    pwRow.append(mk("span", "acct-key", "Password"));
+    const pwVal = mk("span", "acct-val");
+    if (c.pw) {
+        const dots = mk("span", "acct-dots", "\u2022".repeat(Math.min(c.pw.length, 14)));
+        dots.setAttribute("aria-hidden", "true");
+        pwVal.append(dots, mk("span", "acct-count", c.pw.length + " characters"), mk("span", "acct-tag", "New"));
+    } else {
+        pwVal.append(mk("span", "acct-same", "No change"));
+    }
+    pwRow.append(pwVal);
+    summary.append(nameRow, pwRow);
+
+    const notes = mk("ul", "acct-notes");
+    notes.style.setProperty("--r", 3);
+    notes.append(mk("li", "", "You'll stay signed in on this device."));
+    if (c.name) notes.append(mk("li", "", "Everyone in the chat sees your new username straight away, and \"" + myName + "\" becomes free for someone else to take."));
+    if (c.pw) notes.append(mk("li", "", "Use the new password the next time you log in."));
+
+    const actions = mk("div", "prof-actions");
+    const accept = mk("button", "prof-btn green", "Accept changes");
+    accept.type = "button";
+    accept.style.setProperty("--r", 4);
+    accept.addEventListener("click", acceptAccount);
+    const back = mk("button", "prof-btn", "Go back");
+    back.type = "button";
+    back.style.setProperty("--r", 5);
+    back.addEventListener("click", () => closeAcctConfirm(() => { if (acctFields) acctFields.review.focus({ preventScroll: true }); }));
+    actions.append(accept, back);
+
+    body.append(intro, summary, notes, actions);
+    acctConfirmCard.append(head, body);
+    acctUi = { accept, back };
+}
+
+function setAcctBusy(on) {
+    acctBusy = on;
+    if (!acctUi) return;
+    acctUi.accept.disabled = on;
+    acctUi.back.disabled = on;
+    acctUi.accept.textContent = on ? "Saving\u2026" : "Accept changes";
+}
+
+function closeAcctConfirm(after) {
+    if (acctConfirm.hidden || acctConfirm.classList.contains("is-closing")) { if (after) after(); return; }
+    clearTimeout(acctConfirmTimer);
+    const done = () => {
+        clearTimeout(acctConfirmTimer);
+        acctConfirm.hidden = true;
+        acctConfirm.classList.remove("is-closing");
+        acctConfirmCard.replaceChildren();
+        acctUi = null;
+        if (after) after();
+    };
+    if (PROF_REDUCED.matches) { done(); return; }
+    acctConfirm.classList.add("is-closing");
+    acctConfirmTimer = setTimeout(done, ACCT_OUT_MS);
+}
+
+acctConfirm.addEventListener("mousedown", (e) => {
+    if (e.target === acctConfirm && !acctBusy) closeAcctConfirm(() => { if (acctFields) acctFields.review.focus({ preventScroll: true }); });
+});
+
+// "Accept changes": send the three pieces (always all three, empty = unchanged), then ACCTDO, then wait for the answer.
+async function acceptAccount() {
+    if (acctBusy || !acctPending) return;
+    const c = acctPending;
+    setAcctBusy(true);
+    let result = null;
+    try {
+        const ack = new Promise((resolve, reject) => {
+            acctAck = { resolve, reject };
+            acctAckTimer = setTimeout(() => reject(new Error("The server didn't answer. Please try again.")), ACCT_WAIT_MS);
+        });
+        ack.catch(() => { });
+        const send = (field, value) => {
+            if (!sendPacket("ACCTF", myId, "", mySecret + "|" + field + "|" + value)) throw new Error("Not connected. Please try again in a moment.");
+        };
+        send("cur", c.cur);
+        send("name", c.name);
+        send("pw", c.pw);
+        if (!sendPacket("ACCTDO", myId, "", mySecret)) throw new Error("Not connected. Please try again in a moment.");
+        result = await ack;
+    } catch (err) {
+        clearTimeout(acctAckTimer);
+        acctAck = null;
+        setAcctBusy(false);
+        acctFailed(err.message || "Couldn't save your changes.");
+        return;
+    }
+    clearTimeout(acctAckTimer);
+    acctAck = null;
+    setAcctBusy(false);
+    acctPending = null;
+    const f = result.flags || "";
+    const text = f.indexOf("n") >= 0 && f.indexOf("p") >= 0 ? "Username and password updated"
+        : f.indexOf("n") >= 0 ? "Username changed to " + result.name
+        : "Password updated";
+    closeAcctConfirm();
+    closeAccount();
+    setTimeout(() => showAcctToast(text), 320);
+}
+
+// Back to the form, with the reason shown above the buttons.
+function acctFailed(text) {
+    acctPending = null;
+    closeAcctConfirm(() => {
+        if (!acctFields) return;
+        const target = /current password/i.test(text) ? acctFields.cur : /username/i.test(text) ? acctFields.name : null;
+        if (target === acctFields.cur) acctFields.cur.value = "";
+        acctShowError(text, target);
+    });
+}
+
+function onAcctOk(m) {
+    if (acctAck) acctAck.resolve({ name: m.name, flags: m.payload || "" });
+}
+
+function onAcctError(text) {
+    if (acctAck) acctAck.reject(new Error(text));
+    else addSystem("Couldn't change your account: " + text, current);
+}
+
+// A green popup in the bottom right corner (the same stack as "<name> joined the chat").
+function showAcctToast(text) {
+    placeJoinToasts();
+    while (joinToasts.children.length >= MAX_JOIN_TOASTS) joinToasts.firstElementChild.remove();
+    const t = mk("div", "join-toast acct-toast");
+    t.append(mk("span", "acct-done"), mk("span", "", text));
+    joinToasts.append(t);
+    setTimeout(() => dismissJoinToast(t), JOIN_TOAST_MS + 1500);
+}
+
+// ----- somebody changed their username (NAMECHG) -----
+// The account is the same, only the name changed, so everything we know about the old name moves to the new one.
+function onNameChanged(oldName, newName) {
+    if (!oldName || !newName) return;
+    const oldKey = oldName.toLowerCase(), newKey = newName.toLowerCase();
+    const mine = same(oldName, myName);
+    if (mine) {
+        myName = newName;
+        saveSession(myId, newName, mySecret);
+        $("meName").textContent = newName;
+    }
+
+    // messages already on screen (and in the saved history of this visit)
+    let touched = false;
+    CHANNELS.forEach((c) => {
+        store[c.id].items.forEach((it) => {
+            if (!it.name || !same(it.name, oldName)) return;
+            it.name = newName;
+            if (it.id === "h:" + oldKey) it.id = "h:" + newKey;     // keeps grouping working for saved messages
+            touched = true;
+        });
+    });
+
+    peers.forEach((p) => { if (same(p.name, oldName)) p.name = newName; });
+    typers.forEach((t) => { if (same(t.name, oldName)) t.name = newName; });
+    registered.delete(oldKey);
+    registered.set(newKey, newName);
+    askedAbout.add(newKey);
+
+    // the profile we already loaded belongs to the account, so keep it (and its pictures) under the new name
+    const p = profiles.get(oldKey);
+    if (p) {
+        p.name = newName;
+        if (oldKey !== newKey) {
+            profiles.delete(oldKey);
+            profiles.set(newKey, p);
+            if (avatarAsked.delete(oldKey)) avatarAsked.add(newKey);
+        }
+        if (profOpen === oldKey) profOpen = newKey;
+    }
+    if (profOpen === newKey && !profEditing && !profileModal.hidden) renderProfile();
+    if (mine) decorateAvatar($("meAvatar"), newName);      // after the profile moved, so your picture stays
+
+    renderUsers();
+    renderTyping();
+    if (touched) {
+        const top = logEl.scrollTop;
+        renderChannel();
+        logEl.scrollTop = top;
+    }
+    if (mine) {
+        sendPacket("HERE", myId, myName, "");       // tell everybody the new name right away
+        logLine("System", "Your username is now " + myName + ".");
+    } else {
+        logLine("System", oldName + " is now called " + newName + ".");
+    }
+}
+
+// ----- ways in -----
+$("acctBtn").addEventListener("click", () => openAccount($("acctBtn")));
+
+// Escape closes the top-most account pop-up (the confirm one first), and Tab stays inside it.
+// Runs before the page-wide Escape handler so that one key press only closes one thing.
+window.addEventListener("keydown", (e) => {
+    const top = !acctConfirm.hidden ? acctConfirm : (!acctModal.hidden ? acctModal : null);
+    if (!top) return;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (acctBusy) return;
+        if (top === acctConfirm) closeAcctConfirm(() => { if (acctFields) acctFields.review.focus({ preventScroll: true }); });
+        else closeAccount();
+        return;
+    }
+    if (e.key !== "Tab") return;
+    const items = Array.from(top.querySelectorAll("button, input, textarea, select, a[href]"))
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!items.length) { e.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (!top.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}, true);
