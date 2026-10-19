@@ -256,8 +256,8 @@ The chat page connects to `ws://<host>:8000`. Accounts, history, pictures and li
 1. **Open the app** at `http://localhost:8000/`.
 2. **Sign up**: choose a username (2–16 characters) and a password, then submit. Next time, use **Log in**.
 3. **Chat**: you land on `#general`. Pick another channel (`#random`, `#help`, `#memes`) from the left sidebar.
-4. **Send a message**: type in the box at the bottom and press **Enter** or click **Send** (max 300 characters).
-5. **Edit or delete a message**: hover over one of your own messages and click the pencil to edit it (Enter saves, Esc cancels) or the bin to delete it (you are asked to confirm). Both changes appear instantly for everyone in the channel. Other people's messages have no buttons.
+4. **Send a message**: type in the box at the bottom and press **Enter** or click **Send** (max 300 characters). Press **Ctrl+Enter** (Cmd+Enter on a Mac) to start a new line; the box grows as you type and the message keeps its line breaks.
+5. **Edit or delete a message**: hover over one of your own messages and click the pencil to edit it (Enter saves, Ctrl+Enter adds a line, Esc cancels) or the bin to delete it (you are asked to confirm). Both changes appear instantly for everyone in the channel. Other people's messages have no buttons.
 6. **Send a picture**: click the attach button, or drag and drop an image onto the chat. Pictures are resized and compressed automatically.
 7. **See who is around**: the members panel on the right shows online users and the total number of registered accounts. A "typing" indicator appears when someone is writing.
 8. **Debug**: expand the connection console at the bottom to watch packets going back and forth.

@@ -43,6 +43,21 @@ const CHANNELS = [
 // joinScreen is the small "getting your chat ready" card; chatScreen is the chat itself.
 const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
 const msgInput = $("msgInput"), sendBtn = $("sendBtn");
+
+// The message box is a <textarea> so a message can have several lines.
+// Enter sends; Ctrl+Enter (Cmd+Enter on a Mac) starts a new line. The box grows with its text.
+function insertNewline(box) {
+    const a = box.selectionStart, b = box.selectionEnd;
+    if (box.value.length - (b - a) + 1 > box.maxLength) return;      // no room left (maxlength counts the line break)
+    box.value = box.value.slice(0, a) + "\n" + box.value.slice(b);
+    box.setSelectionRange(a + 1, a + 1);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function autoGrow(box) {
+    box.style.height = "auto";
+    box.style.height = Math.min(box.scrollHeight + (box.offsetHeight - box.clientHeight), 160) + "px";
+}
+msgInput.addEventListener("input", () => autoGrow(msgInput));
 const logEl = $("log"), usersEl = $("users"), countEl = $("count");
 const totalEl = $("total");
 const panel = $("panel"), whoBtn = $("whoBtn"), chanBtn = $("chanBtn");
@@ -671,6 +686,7 @@ function switchChannel(ch) {
     const dir = CHANNELS.findIndex((c) => c.id === ch) > CHANNELS.findIndex((c) => c.id === current) ? 1 : -1;
     current = ch;
     msgInput.value = drafts[ch] || "";
+    autoGrow(msgInput);
     closeMentions();
     store[ch].unread = 0;
     store[ch].mentions = 0;
@@ -962,9 +978,9 @@ function startEdit(item, bar) {
 
     const form = document.createElement("form");
     form.className = "edit-form";
-    const input = document.createElement("input");
+    const input = document.createElement("textarea");
     input.className = "field edit-input";
-    input.type = "text";
+    input.rows = 1;
     input.maxLength = 1000;
     input.value = item.text;
     input.setAttribute("aria-label", "Edit your message");
@@ -978,12 +994,17 @@ function startEdit(item, bar) {
     cancel.textContent = "Cancel";
     const hint = document.createElement("small");
     hint.className = "edit-hint";
-    hint.textContent = "Enter to save, Esc to cancel";
+    hint.textContent = "Enter to save, Ctrl+Enter for a new line, Esc to cancel";
     form.append(input, save, cancel, hint);
 
     const close = () => { form.remove(); bubble.hidden = false; bar.hidden = false; };
     cancel.addEventListener("click", close);
-    input.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } });
+    input.addEventListener("input", () => autoGrow(input));
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.preventDefault(); close(); }
+        else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) { e.preventDefault(); insertNewline(input); }
+        else if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+    });
     form.addEventListener("submit", (e) => {
         e.preventDefault();
         const text = input.value.trim();
@@ -994,6 +1015,7 @@ function startEdit(item, bar) {
     bubble.hidden = true;
     bar.hidden = true;
     wrap.append(form);
+    autoGrow(input);
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
 }
@@ -1504,6 +1526,7 @@ function insertMention(name) {
     const v = msgInput.value;
     msgInput.value = v + (v && !/\s$/.test(v) ? " " : "") + "@" + name + " ";
     msgInput.focus();
+    autoGrow(msgInput);
     msgInput.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -1774,6 +1797,7 @@ $("chatForm").addEventListener("submit", (e) => {
     if (sendPacket("MSG", myId, myName, current + "|" + mid + "|" + text)) {
         saveMessage(current, text, mid);
         msgInput.value = "";
+        autoGrow(msgInput);
         drafts[current] = "";
         cancelTyping();
     }
@@ -1897,6 +1921,18 @@ msgInput.addEventListener("keyup", (e) => {
     if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(e.key) >= 0) updateMentions();
 });
 msgInput.addEventListener("keydown", (e) => {
+    // Ctrl+Enter (or Cmd+Enter) = new line. Browsers don't add one themselves, so we do.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault();
+        insertNewline(msgInput);
+        return;
+    }
+    // A <textarea> doesn't submit its form on Enter, so plain Enter sends (Shift+Enter still adds a line).
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && mentionList.hidden) {
+        e.preventDefault();
+        $("chatForm").requestSubmit();
+        return;
+    }
     if (mentionList.hidden) return;
     const n = mentionMatches.length;
     if (e.key === "Escape") {

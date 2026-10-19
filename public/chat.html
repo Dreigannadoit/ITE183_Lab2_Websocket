@@ -114,9 +114,9 @@
                 </button>
                 <input id="fileInput" type="file" accept="image/*" multiple hidden>
                 <ul id="mentionList" class="mention-list" role="listbox" aria-label="Mention someone" hidden></ul>
-                <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Message #general"
-                    maxlength="1000" disabled role="combobox" aria-autocomplete="list" aria-expanded="false"
-                    aria-controls="mentionList">
+                <textarea id="msgInput" class="field" rows="1" aria-label="Message" placeholder="Message #general"
+                    title="Enter to send, Ctrl+Enter for a new line" maxlength="1000" disabled role="combobox"
+                    aria-autocomplete="list" aria-expanded="false" aria-controls="mentionList"></textarea>
                 <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
             </form>
         </section>

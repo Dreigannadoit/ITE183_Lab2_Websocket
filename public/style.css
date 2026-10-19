@@ -1603,3 +1603,17 @@ html.pt-came .join-card { animation: pop .55s cubic-bezier(.3, 1.6, .5, 1) .5s b
     transition: opacity .2s, transform .2s;
 }
 .prof-banner.moving .prof-banner-hint, .prof-banner-hint.used { opacity: 0; transform: translateY(6px); }
+
+/* ------------------------------------------------------------
+   MULTI-LINE MESSAGE BOX (Ctrl+Enter adds a line, the box grows)
+------------------------------------------------------------ */
+textarea#msgInput,
+textarea.edit-input {
+    display: block;
+    resize: none;
+    overflow-y: auto;
+    line-height: 1.35;
+    max-height: 160px;
+}
+textarea#msgInput { flex: 1; min-width: 0; }
+.composer { align-items: flex-end; }
