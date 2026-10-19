@@ -1,3 +1,7 @@
+// ==========================================
+// Property of (c) Drei Abmab || R.A BAMBA
+// ==========================================
+
 include("lib/http.bzg");
 include("lib/sqlite.bzg");
 var server = http(8000);

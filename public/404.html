@@ -15,18 +15,58 @@
     <!-- page transitions: must load in the head so the new page is covered from its first frame -->
     <script src="/scripts/transition.js"></script>
     <style>
-        .notfound-code { font-size: 96px; margin-bottom: 10px; }
-        .notfound-card .tagline { margin-bottom: 8px; }
-        .notfound-card .hint { margin: 0 0 26px; text-align: center; }
-        .notfound-actions { display: flex; justify-content: center; }
-        .notfound-actions .btn { display: inline-block; text-decoration: none; text-align: center; }
-        .mascot .tear { animation: tear 1.6s ease-in infinite; transform-box: fill-box; transform-origin: 50% 0; }
-        @keyframes tear {
-            0% { transform: translateY(-4px) scale(.6); opacity: 0; }
-            25% { opacity: 1; }
-            100% { transform: translateY(16px) scale(1); opacity: 0; }
+        .notfound-code {
+            font-size: 96px;
+            margin-bottom: 10px;
         }
-        @media (max-width: 900px) { .notfound-code { font-size: 80px; } }
+
+        .notfound-card .tagline {
+            margin-bottom: 8px;
+        }
+
+        .notfound-card .hint {
+            margin: 0 0 26px;
+            text-align: center;
+        }
+
+        .notfound-actions {
+            display: flex;
+            justify-content: center;
+        }
+
+        .notfound-actions .btn {
+            display: inline-block;
+            text-decoration: none;
+            text-align: center;
+        }
+
+        .mascot .tear {
+            animation: tear 1.6s ease-in infinite;
+            transform-box: fill-box;
+            transform-origin: 50% 0;
+        }
+
+        @keyframes tear {
+            0% {
+                transform: translateY(-4px) scale(.6);
+                opacity: 0;
+            }
+
+            25% {
+                opacity: 1;
+            }
+
+            100% {
+                transform: translateY(16px) scale(1);
+                opacity: 0;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .notfound-code {
+                font-size: 80px;
+            }
+        }
     </style>
 </head>
 
@@ -63,6 +103,19 @@
         </section>
     </main>
 
+    <script>
+        const tag = String.raw`
+________ _____________________.___     _____ __________    _____      _____ __________ 
+\______ \\______   \_   _____/|   |   /  _  \\______   \  /     \    /  _  \\______   \
+ |    |  \|       _/|    __)_ |   |  /  /_\  \|    |  _/ /  \ /  \  /  /_\  \|    |  _/
+ |    |   \    |   \|        \|   | /    |    \    |   \/    Y    \/    |    \    |   \
+/_______  /____|_  /_______  /|___| \____|__  /______  /\____|__  /\____|__  /______  /
+        \/       \/        \/               \/       \/         \/         \/       \/
+`;
+
+        console.log(tag);
+        console.log("Drei Abmab Studios (c) || 2026")
+    </script>
 </body>
 
 </html>

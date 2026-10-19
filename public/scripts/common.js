@@ -1,3 +1,7 @@
+// ==========================================
+// Property of (c) Drei Abmab || R.A BAMBA
+// ==========================================
+
 // BISCORD shared code. Loaded first by BOTH login.html and chat.html.
 // Holds the connection address, the "who is logged in" helpers and the console.
 

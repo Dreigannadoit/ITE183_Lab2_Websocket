@@ -1,3 +1,7 @@
+// ==========================================
+// Property of (c) Drei Abmab || R.A BAMBA
+// ==========================================
+
 // BISCORD chat page. Loaded by chat.html, after common.js.
 // Logging in / signing up happens on the login page (login.html + login.js).
 // This page only asks the server "is this tab still logged in?" (RESUME) and, if not,
