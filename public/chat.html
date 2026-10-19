@@ -109,6 +109,16 @@
 
             <div id="dropHint" class="drop-hint" hidden>Drop a picture to send it</div>
 
+            <div id="replyBar" class="reply-bar" hidden>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9 14 4 9l5-5" />
+                    <path d="M4 9h10a6 6 0 0 1 6 6v4" />
+                </svg>
+                <span class="reply-bar-body">Replying to <b id="replyWho"></b><span id="replyText" class="reply-bar-text"></span></span>
+                <button id="replyCancel" class="act-btn" type="button" aria-label="Cancel reply" title="Cancel reply (Esc)">&#10005;</button>
+            </div>
+
             <form id="chatForm" class="composer" autocomplete="off">
                 <button id="attachBtn" class="btn attach" type="button" aria-label="Send a picture"
                     title="Send a picture (you can also paste or drop one)" disabled>

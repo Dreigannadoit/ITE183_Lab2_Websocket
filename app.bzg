@@ -28,7 +28,7 @@ var server = http(8000);
 //     LOGOUT|id||                           (forget this login)
 //     HISTORY|id||
 //     USERS|id||                            ("who has an account?" for the member panel)
-//     SAVE|id|channel|timestamp|text        (payload is  timestamp|messageId|text)
+//     SAVE|id|channel|timestamp|text        (payload is  timestamp|messageId|text; messageId may be  id~replyToId  for a reply)
 //     EDIT|id||secret|messageId|newText     (only the author may edit, see doEdit)
 //     DELETE|id||secret|messageId           (only the author may delete, see doDelete)
 //
@@ -53,7 +53,7 @@ var server = http(8000);
 //   server -> that one client
 //     AUTHOK|id|username|                   (answer to SIGNUP, LOGIN and RESUME)
 //     AUTHERR|id|message|
-//     HIST|id|user|channel|timestamp|messageId|edited|text   (one per saved message)
+//     HIST|id|user|channel|timestamp|messageId|edited|text   (one per saved message; messageId is  id~replyToId  for a reply)
 //     HISTEND|id||
 //     USER|id|username|                     (one per registered account)
 //     USEREND|id||
@@ -408,6 +408,7 @@ function createTables() {
 function upgradeTables() {
     dbTry("ALTER TABLE messages ADD COLUMN mid VARCHAR(24);");
     dbTry("ALTER TABLE messages ADD COLUMN edited INTEGER NOT NULL DEFAULT 0;");
+    dbTry("ALTER TABLE messages ADD COLUMN reply_to VARCHAR(24);");     // id of the message this one replies to
     dbExec("UPDATE messages SET mid = 'old' || id WHERE mid IS NULL;");
     dbExec("CREATE INDEX IF NOT EXISTS idx_messages_mid ON messages (mid);");
 }
@@ -422,10 +423,15 @@ function cleanTs(ts) {
 
 // Stores one message. `user` must be an existing username, `channel` a name from CHANNELS,
 // `mid` the message's id (letters and digits only, already checked by the caller).
-function addLog(channel, user, ts, text, mid) {
-    return dbExec("INSERT INTO messages (channel_id, user_id, ts, text, mid) VALUES ((SELECT id FROM channels WHERE name = "
+// `replyTo` is the id of the message being answered, or "" for a normal message.
+function addLog(channel, user, ts, text, mid, replyTo) {
+    var replySql = "NULL";
+    if (sizeof(replyTo) > 0) {
+        replySql = sqlStr(replyTo);
+    }
+    return dbExec("INSERT INTO messages (channel_id, user_id, ts, text, mid, reply_to) VALUES ((SELECT id FROM channels WHERE name = "
             + sqlStr(channel) + "), (SELECT id FROM users WHERE username = " + sqlStr(user) + "), "
-            + cleanTs(ts) + ", " + sqlStr(text) + ", " + sqlStr(mid) + ");");
+            + cleanTs(ts) + ", " + sqlStr(text) + ", " + sqlStr(mid) + ", " + replySql + ");");
 }
 
 // ------------------------------------------
@@ -498,6 +504,12 @@ function doSave(clientId, id, channel, payload) {
     var idText = parsePair(pair[1]);        // messageId | text
     var mid = idText[0];
     var text = idText[1];
+    var replyTo = "";                       // "id~replyToId" means this message is a reply
+    var tilde = indexOfChar(mid, "~", 0);
+    if (tilde >= 0) {
+        replyTo = substr(mid, tilde + 1);
+        mid = substr(mid, 0, tilde);
+    }
     if (sizeof(text) > MAX_TEXT) {
         text = substr(text, 0, MAX_TEXT);
     }
@@ -514,8 +526,19 @@ function doSave(clientId, id, channel, payload) {
     if (substr(text, 0, 5) == "[img]") {
         text = " " + text;     // typed text can't pretend to be a saved picture
     }
+    // A reply must point at a message that exists in this same channel; otherwise it is saved as a normal message.
+    if (sizeof(replyTo) > 0) {
+        var okReply = onlyChars(replyTo, ID_CHARS, 24);
+        if (okReply) {
+            okReply = rowCount(dbQuery("SELECT m.id FROM messages m JOIN channels c ON c.id = m.channel_id WHERE m.mid = "
+                                       + sqlStr(replyTo) + " AND c.name = " + sqlStr(channel) + " LIMIT 1;")) > 0;
+        }
+        if (!okReply) {
+            replyTo = "";
+        }
+    }
 
-    addLog(channel, sessName[s], pair[0], text, mid);
+    addLog(channel, sessName[s], pair[0], text, mid, replyTo);
 }
 
 function doHistory(clientId, id) {
@@ -531,7 +554,7 @@ function doHistory(clientId, id) {
         var ch = CHANNELS[c];
 
         // Newest HISTORY_PER_CHANNEL messages of this channel (newest first) ...
-        var rows = dbQuery("SELECT u.username AS username, CAST(m.ts AS TEXT) AS ts, COALESCE(m.mid, '') AS mid, CAST(m.edited AS TEXT) AS edited, m.text AS text FROM messages m "
+        var rows = dbQuery("SELECT u.username AS username, CAST(m.ts AS TEXT) AS ts, COALESCE(m.mid, '') || CASE WHEN m.reply_to IS NULL OR m.reply_to = '' THEN '' ELSE '~' || m.reply_to END AS mid, CAST(m.edited AS TEXT) AS edited, m.text AS text FROM messages m "
                             + "JOIN users u ON u.id = m.user_id JOIN channels c ON c.id = m.channel_id "
                             + "WHERE c.name = " + sqlStr(ch) + " ORDER BY m.id DESC LIMIT " + HISTORY_PER_CHANNEL + ";");
 
@@ -754,7 +777,7 @@ function picChunk(id, payload) {
 
     if (("" + pendGot[at]) == pendTotal[at]) {
         var logged = addLog(pendCh[at], pendUser[at], pendTs[at],
-               IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at], picId);
+               IMG_MARK + picId + "," + pendMime[at] + "," + pendSize[at] + "," + pendW[at] + "," + pendH[at], picId, "");
         if (logged) {
             print("Saved picture " + picId + " from " + pendUser[at] + " (" + pendTotal[at] + " pieces)");
         } else {

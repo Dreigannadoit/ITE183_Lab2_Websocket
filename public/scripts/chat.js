@@ -165,15 +165,18 @@ function splitPayload(payload) {
     return { ch: "general", text: payload };
 }
 
-// MSG payload:  channel|messageId|text   ->  { ch, mid, text }
+// MSG payload:  channel|messageId|text   ->  { ch, mid, reply, text }
+// For a reply the id slot is  messageId~replyToId  (the id of the message being answered).
 const MID_RE = /^[a-z0-9]{1,24}$/;
+const MID_REPLY_RE = /^([a-z0-9]{1,24})(?:~([a-z0-9]{1,24}))?$/;
 function splitMsg(payload) {
     const a = splitPayload(payload);
     const k = a.text.indexOf("|");
-    if (k > 0 && MID_RE.test(a.text.slice(0, k))) {
-        return { ch: a.ch, mid: a.text.slice(0, k), text: a.text.slice(k + 1) };
+    const idm = k > 0 ? MID_REPLY_RE.exec(a.text.slice(0, k)) : null;
+    if (idm) {
+        return { ch: a.ch, mid: idm[1], reply: idm[2] || "", text: a.text.slice(k + 1) };
     }
-    return { ch: a.ch, mid: "", text: a.text };
+    return { ch: a.ch, mid: "", reply: "", text: a.text };
 }
 
 // "a|b|c|rest of it"  ->  ["a", "b", "c", "rest of it"]   (n fields, then whatever is left)
@@ -407,7 +410,7 @@ function handle(data) {
         const msg = splitMsg(m.payload);
         clearTyper(m.id);
         addPeer(m.id, m.name);
-        receiveMessage(msg.ch, m.id, m.name, msg.text, msg.mid);
+        receiveMessage(msg.ch, m.id, m.name, msg.text, msg.mid, msg.reply);
     } else if (m.type === "IMGH") {
         onImageHeader(m);
     } else if (m.type === "IMGC") {
@@ -688,6 +691,7 @@ function switchChannel(ch) {
     if (ch === current) { closeDrawers(); return; }
     stopTyping();                       // we were typing in the old channel
     drafts[current] = msgInput.value;   // keep what was typed, per channel
+    cancelReply();                      // a reply belongs to the channel it was started in
     const dir = CHANNELS.findIndex((c) => c.id === ch) > CHANNELS.findIndex((c) => c.id === current) ? 1 : -1;
     current = ch;
     msgInput.value = drafts[ch] || "";
@@ -840,15 +844,17 @@ function makeMessage(item, grouped) {
     }
 
     if (item.mid) row.dataset.mid = item.mid;
-    if (item.mid && same(item.name, myName)) {
-        // Your own message: it gets Edit / Delete buttons. (Other people's messages never do.)
+    if (item.mid) {
+        // Every message gets a Reply button. Only your own messages also get Edit / Delete.
         // The buttons are only a convenience; the server checks again who wrote the message.
         if (item.kind === "img" && item.status === "sending") row.classList.add("busy");
         const wrap = document.createElement("div");
         wrap.className = "bwrap";
+        if (item.replyTo) wrap.append(makeReplyRef(item));
         wrap.append(bubble, makeActions(item));
         content.append(wrap);
     } else {
+        if (item.replyTo) content.append(makeReplyRef(item));
         content.append(bubble);
     }
 
@@ -913,10 +919,10 @@ function addSystem(text, ch) {
     addItem(ch || "general", { kind: "sys", text, ts: Date.now() });
 }
 
-function receiveMessage(ch, id, name, text, mid) {
+function receiveMessage(ch, id, name, text, mid, replyTo) {
     const mine = id === myId;
     const mention = !mine && mentionsMe(text);
-    addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention, mid: mid || "", edited: false });
+    addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention, mid: mid || "", edited: false, replyTo: replyTo || "" });
     if (!mine) noteUnread(ch, mention);
 }
 
@@ -927,6 +933,80 @@ function noteUnread(ch, mention) {
     updateBadges();
 }
 
+// ---------- replying to messages ----------
+// The Reply button (hover a message, or look under it on a phone) puts a "Replying to ..." bar above the message box.
+// Send, and the new message carries a small quote of the original. On the wire the reply goes in the message-id slot:
+//   MSG|id|name|channel|messageId~replyToId|text     SAVE|id|channel|ts|messageId~replyToId|text
+// The server saves it (messages.reply_to) only if the original exists in the same channel, and sends it back with
+// the history. The quote is built from the original message we hold, so if the original was deleted (or is older than
+// the history we loaded) it says so instead.
+const replyBar = $("replyBar"), replyWho = $("replyWho"), replyText = $("replyText");
+let replyingTo = null;       // the item being answered, or null
+
+const REPLY_SNIPPET = 90;
+function snippetOf(item) {
+    if (!item) return "";
+    if (item.kind === "img") return "Photo";
+    const t = (item.text || "").replace(/\s+/g, " ").trim();
+    return t.length > REPLY_SNIPPET ? t.slice(0, REPLY_SNIPPET) + "\u2026" : t;
+}
+
+function findItem(ch, mid) {
+    if (!MID_RE.test(mid) || !store[ch]) return null;
+    return store[ch].items.find((it) => it.mid === mid && it.kind !== "sys") || null;
+}
+
+function startReply(item) {
+    if (!joined || !item || !item.mid) return;
+    replyingTo = item;
+    replyWho.textContent = same(item.name, myName) ? "yourself" : item.name;
+    replyText.textContent = snippetOf(item);
+    replyBar.hidden = false;
+    msgInput.focus();
+}
+
+function cancelReply() {
+    replyingTo = null;
+    replyBar.hidden = true;
+}
+
+$("replyCancel").addEventListener("click", () => { cancelReply(); msgInput.focus(); });
+
+// The quote shown above a reply. Clicking it scrolls to the original message.
+function makeReplyRef(item) {
+    const ch = item.ch || current;
+    const orig = findItem(ch, item.replyTo);
+    const ref = document.createElement("button");
+    ref.type = "button";
+    ref.className = "reply-ref" + (orig ? "" : " gone");
+    ref.dataset.ref = item.replyTo;
+    const who = document.createElement("b");
+    const text = document.createElement("span");
+    text.className = "reply-text";
+    if (orig) {
+        who.textContent = same(orig.name, myName) ? "You" : orig.name;
+        text.textContent = snippetOf(orig);
+        ref.title = "Jump to the original message";
+        ref.addEventListener("click", () => jumpToMessage(item.replyTo));
+    } else {
+        who.textContent = "Reply";
+        text.textContent = "The original message was deleted or is too old to show.";
+        ref.disabled = true;
+    }
+    ref.append(who, text);
+    return ref;
+}
+
+function jumpToMessage(mid) {
+    const row = findRow(mid);
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.remove("flash");
+    void row.offsetWidth;               // restart the animation if it is already playing
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 1600);
+}
+
 // ---------- edit and delete your own messages ----------
 // Only the author gets the buttons, and the server only accepts EDIT / DELETE from the author
 // (it checks the secret from login and who wrote the message), so this is more than cosmetics.
@@ -935,6 +1015,8 @@ function noteUnread(ch, mention) {
 // and answers a refusal to the sender only (EDITERR / DELETEERR with the reason).
 const PENCIL_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const TRASH_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>';
+
+const REPLY_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v4"/></svg>';
 
 function actionButton(label, html, extraClass, onClick) {
     const b = document.createElement("button");
@@ -963,6 +1045,8 @@ function makeActions(item) {
             bar.append(q, yes, no);
             no.focus();
         } else {
+            bar.append(actionButton("Reply", REPLY_SVG, "", () => startReply(item)));
+            if (!same(item.name, myName)) return;       // Edit and Delete are for your own messages only
             if (item.kind === "msg") bar.append(actionButton("Edit message", PENCIL_SVG, "", () => startEdit(item, bar)));
             bar.append(actionButton(item.kind === "img" ? "Delete picture" : "Delete message", TRASH_SVG, "danger", () => show(true)));
         }
@@ -1078,6 +1162,11 @@ function applyEdited(ch, mid, name, text) {
     const bubble = row && row.querySelector(".bubble");
     if (bubble) fillBubble(bubble, item);
     syncEditedNote(row, item);
+    // replies that quote this message, and the bar above the message box
+    if (ch === current) {
+        logEl.querySelectorAll('.reply-ref[data-ref="' + mid + '"] .reply-text').forEach((el) => { el.textContent = snippetOf(item); });
+    }
+    if (replyingTo === item) replyText.textContent = snippetOf(item);
 }
 
 function applyDeleted(ch, mid, name) {
@@ -1085,6 +1174,7 @@ function applyDeleted(ch, mid, name) {
     if (at < 0) return;
     const gone = store[ch].items.splice(at, 1)[0];
     forgetItem(gone);
+    if (replyingTo === gone) cancelReply();
     if (ch !== current) return;
     const stick = nearBottom();
     const top = logEl.scrollTop;
@@ -1659,9 +1749,11 @@ function handleServerReply(m) {
     if (m.type === "HIST") {
         // name = who wrote it, payload = channel|timestamp|messageId|edited|text
         const a = splitPayload(m.payload);
+        // (messageId is  id~replyToId  when the message is a reply)
         const f = takeFields(a.text, 3);               // timestamp, messageId, edited, text
         if (historyBuf && historyBuf[a.ch] && a.text.indexOf("|") >= 0) {
-            historyBuf[a.ch].push({ user: m.name, ts: Number(f[0]) || Date.now(), mid: f[1], edited: f[2] === "1", text: f[3] });
+            const idm = MID_REPLY_RE.exec(f[1]);
+            historyBuf[a.ch].push({ user: m.name, ts: Number(f[0]) || Date.now(), mid: idm ? idm[1] : f[1], reply: idm && idm[2] ? idm[2] : "", edited: f[2] === "1", text: f[3] });
         }
         return true;
     }
@@ -1761,7 +1853,7 @@ function finishHistory() {
                 const who = same(m.user, myName) ? myId : "h:" + m.user.toLowerCase();
                 return savedPicture(m, who) || {
                     kind: "msg", id: who, name: m.user, text: m.text, ts: m.ts, mention: false,
-                    mid: m.mid, edited: !!m.edited
+                    mid: m.mid, edited: !!m.edited, replyTo: m.reply || "", ch: c.id
                 };
             });
         });
@@ -1812,9 +1904,12 @@ $("chatForm").addEventListener("submit", (e) => {
     closeMentions();
     const text = msgInput.value.trim();
     if (!text || !joined) return;
-    const mid = newMsgId();
+    let mid = newMsgId();
+    // a reply travels as  messageId~replyToId  (only if the original is still here)
+    if (replyingTo && findItem(current, replyingTo.mid)) mid += "~" + replyingTo.mid;
     if (sendPacket("MSG", myId, myName, current + "|" + mid + "|" + text)) {
         saveMessage(current, text, mid);
+        cancelReply();
         msgInput.value = "";
         autoGrow(msgInput);
         drafts[current] = "";
@@ -1950,6 +2045,11 @@ msgInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && mentionList.hidden) {
         e.preventDefault();
         $("chatForm").requestSubmit();
+        return;
+    }
+    if (e.key === "Escape" && mentionList.hidden && replyingTo) {
+        e.preventDefault();
+        cancelReply();
         return;
     }
     if (mentionList.hidden) return;

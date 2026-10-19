@@ -14,6 +14,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 - **Four channels**: `#general`, `#random`, `#help` and `#memes`.
 - **Live messaging**: messages are broadcast to everyone through the WebSocket server (limit: 300 characters per message).
 - **Edit and delete your own messages**: hover over one of your messages (or look under it on a phone) to edit it or delete it. Edited messages show an "(edited)" note. Nobody else can edit or delete your messages: the server enforces it (see below).
+- **Reply to messages**: hover over any message (or look under it on a phone) and click the reply arrow. A "Replying to ..." bar appears above the message box (Esc or the cross cancels it). The sent message shows a small quote of the original; click the quote to jump to it. If the original was deleted, the quote says so. Replies are saved with the message (`messages.reply_to`, added automatically) and come back with the history. The server only keeps a reply if the original exists in the same channel.
 - **Chat history**: messages are saved in SQLite. The newest 100 messages per channel are loaded after login or a server restart.
 - **Picture sharing**: attach or drag-and-drop images (JPEG, PNG, GIF, WebP). They are compressed in the browser, sent in chunks, saved in the database and reloaded when they scroll into view.
 - **Typing indicator**: see who is typing in each channel.
@@ -40,7 +41,7 @@ TYPE|id|name|payload
 | `LOGOUT` | Forget this login |
 | `HISTORY` | Request saved messages |
 | `USERS` | Request the list of registered accounts |
-| `SAVE` | Store a chat message |
+| `SAVE` | Store a chat message (the message id can be `id~replyToId` for a reply) |
 | `EDIT` / `DELETE` | Edit or delete a saved message (author only, checked by the server) |
 | `IMGH` / `IMGC` / `IMGGET` | Send a picture (header, chunks) / request a saved picture |
 | `PROFGET` / `PFGET` | Open someone's profile card / fetch their profile picture or backdrop |

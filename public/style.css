@@ -1833,3 +1833,61 @@ textarea#msgInput { flex: 1; min-width: 0; }
     .acct-title { font-size: 24px; }
     .acct-row { grid-template-columns: 1fr; gap: 6px; }
 }
+
+
+/* ------------------------------------------------------------
+   REPLIES
+   The "Replying to ..." bar above the message box, and the quote shown above a reply
+   (see "replying to messages" in chat.js).
+------------------------------------------------------------ */
+.reply-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--yellow);
+    border-top: var(--line) solid var(--ink);
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ink);
+}
+.reply-bar[hidden] { display: none; }
+.reply-bar-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-bar-body b { font-family: var(--display); font-weight: 400; letter-spacing: .3px; }
+.reply-bar-text { margin-left: 10px; font-weight: 700; opacity: .7; }
+.reply-bar + .composer { border-top-width: 0; }
+.reply-bar .act-btn { flex: none; border-color: var(--ink); background: var(--white); }
+
+.reply-ref {
+    display: block;
+    max-width: 100%;
+    margin: 0 0 -6px;
+    padding: 5px 12px 11px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-align: left;
+    color: var(--ink);
+    background: #EFE7FF;
+    border: 3px solid var(--ink);
+    border-radius: 14px 14px 0 0;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.reply-ref b { margin-right: 8px; font-family: var(--display); font-weight: 400; letter-spacing: .3px; }
+.reply-ref .reply-text { opacity: .75; }
+.reply-ref:hover:not(:disabled), .reply-ref:focus-visible { background: var(--yellow); outline: none; }
+.reply-ref.gone, .reply-ref:disabled { cursor: default; font-style: italic; background: #E8E3F0; }
+.reply-ref + .bubble { position: relative; }
+
+.msg.flash .bubble { animation: replyFlash 1.5s ease-out; }
+@keyframes replyFlash {
+    0%, 40% { background: var(--yellow); color: var(--ink); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg.flash .bubble { animation: none; outline: 4px solid var(--orange); }
+}
