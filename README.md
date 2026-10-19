@@ -66,6 +66,11 @@ The diagram shows how the pieces fit together:
    - **Chat History**: `SAVE` and `HISTORY` packets, backed by the messages table (foreign keys to both user and channel, timestamp, text) and the channel table.
    - **Picture**: `IMGH`, `IMGC` and `IMGGET` packets. Pictures are converted to Base64 for transfer and converted back to a photo when requested.
 
+
+### Database Schematic diagram
+
+![Database Schematic](docs/database_schematic.png)
+
 ### UI design (Figma)
 
 The interface was designed in Figma before it was built. The screenshot below shows the design file, with frames for the schematic diagram, the login page, the register page, the general chat and the voice chat lounge.
