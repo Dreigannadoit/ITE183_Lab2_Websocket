@@ -327,6 +327,12 @@ The page shown for any unknown URL, for example `http://localhost:8000/this_does
 
 ---
 
+## Expected Terminal Output
+
+![Expected Terminal Output](docs/Terminal_Output.png)
+
+---
+
 ## Notes & Limitations
 
 - This is a personal / learning project: **passwords are stored as plain text** and there is no real security. Do not reuse a real password.
