@@ -330,7 +330,7 @@ The page shown for any unknown URL, for example `http://localhost:8000/this_does
 
 - This is a personal / learning project: **passwords are stored as plain text** and there is no real security. Do not reuse a real password.
 - Edited messages keep their original time and show "(edited)". There is no edit history.
-- Messages are limited to 300 characters; pictures are compressed to roughly 160 KB before sending.
+- Messages are limited to 1000 characters; pictures are compressed to roughly 530 KB before sending.
 - The channel list is defined in `app.bzg` (`CHANNELS`) and must be kept in sync with the client.
 
 ## License
