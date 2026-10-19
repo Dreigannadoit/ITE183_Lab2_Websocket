@@ -36,7 +36,7 @@ const CHANNELS = [
     { id: "general", topic: "Say hi and hang out" },
     { id: "random", topic: "Anything goes" },
     { id: "help", topic: "Stuck on something? Ask here" },
-    { id: "memes", topic: "Only the good stuff" }, 
+    { id: "memes", topic: "Only the good stuff" },
     { id: "intro", topic: "Let's get to know each other better. Introduce yourself." },
 ];
 
@@ -1293,11 +1293,15 @@ function onImageHeader(m) {
         IMAGE_TYPES.indexOf(mime) >= 0 && w >= 1 && h >= 1 && w <= 8192 && h <= 8192;
     if (!sane) return;
 
-    const item = { kind: "img", id: m.id, name: m.name, ts: Date.now(), imgId: picId, mime, size, w, h,
-                   mid: picId, status: "receiving", progress: 0, blob: null };
+    const item = {
+        kind: "img", id: m.id, name: m.name, ts: Date.now(), imgId: picId, mime, size, w, h,
+        mid: picId, status: "receiving", progress: 0, blob: null
+    };
     images.set(picId, item);
-    incoming.set(picId, { item, parts: new Array(total), got: 0, total,
-                          timer: setTimeout(() => failPicture(picId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) });
+    incoming.set(picId, {
+        item, parts: new Array(total), got: 0, total,
+        timer: setTimeout(() => failPicture(picId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS)
+    });
     clearTyper(m.id);
     addPeer(m.id, m.name);
     addItem(hd.ch, item);
@@ -1449,8 +1453,10 @@ async function sendImage(file, ch) {
     for (let i = 0; i < data.length; i += CHUNK_CHARS) parts.push(data.slice(i, i + CHUNK_CHARS));
 
     const picId = newPicId();
-    const item = { kind: "img", id: myId, name: myName, ts: Date.now(), imgId: picId, mime: pic.mime,
-                   mid: picId, size: pic.blob.size, w: pic.w, h: pic.h, status: "sending", progress: 0, blob: pic.blob };
+    const item = {
+        kind: "img", id: myId, name: myName, ts: Date.now(), imgId: picId, mime: pic.mime,
+        mid: picId, size: pic.blob.size, w: pic.w, h: pic.h, status: "sending", progress: 0, blob: pic.blob
+    };
     images.set(picId, item);
     storedBytes += pic.blob.size;
     addItem(ch, item);
@@ -1680,8 +1686,10 @@ function handleServerReply(m) {
         if (item && total >= 1 && total <= 2000) {
             const old = incoming.get(m.name);
             if (old) clearTimeout(old.timer);
-            incoming.set(m.name, { item, parts: new Array(total), got: 0, total,
-                                   timer: setTimeout(() => failPicture(m.name, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) });
+            incoming.set(m.name, {
+                item, parts: new Array(total), got: 0, total,
+                timer: setTimeout(() => failPicture(m.name, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS)
+            });
         }
         return true;
     }
@@ -1771,8 +1779,10 @@ function savedPicture(m, who) {
     const f = m.text.slice(5).split(",");
     const picId = f[0], mime = f[1], size = +f[2], w = +f[3], h = +f[4];
     if (!picId || IMAGE_TYPES.indexOf(mime) < 0 || !(size > 0) || !(w >= 1) || !(h >= 1)) return null;
-    const item = { kind: "img", id: who, name: m.user, ts: m.ts, imgId: picId, mime, size, w, h,
-                   mid: m.mid || picId, status: "saved", saved: true, progress: 0, blob: null };
+    const item = {
+        kind: "img", id: who, name: m.user, ts: m.ts, imgId: picId, mime, size, w, h,
+        mid: m.mid || picId, status: "saved", saved: true, progress: 0, blob: null
+    };
     images.set(picId, item);
     return item;
 }
@@ -1785,8 +1795,10 @@ function fetchSaved(item) {
     updatePicUI(item);
     sendPacket("IMGGET", myId, myName, item.imgId);
     // if the server never answers, show the usual "didn't arrive" state
-    const tr = { item, parts: [], got: 0, total: 0,
-                 timer: setTimeout(() => failPicture(item.imgId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS) };
+    const tr = {
+        item, parts: [], got: 0, total: 0,
+        timer: setTimeout(() => failPicture(item.imgId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS)
+    };
     incoming.set(item.imgId, tr);
 }
 
@@ -2084,8 +2096,10 @@ function swapProfile(change, dir, after) {
 }
 
 function blankProfile(name) {
-    return { name, loaded: false, failed: false, since: 0, color: "", thought: "", bio: "", links: [],
-             avatarVer: 0, backdropVer: 0, avatarUrl: "", backdropUrl: "", avatarShown: -1, backdropShown: -1 };
+    return {
+        name, loaded: false, failed: false, since: 0, color: "", thought: "", bio: "", links: [],
+        avatarVer: 0, backdropVer: 0, avatarUrl: "", backdropUrl: "", avatarShown: -1, backdropShown: -1
+    };
 }
 
 function mk(tag, cls, text) {
@@ -2387,8 +2401,10 @@ function onProfileImageHeader(m) {
     const key = m.name.toLowerCase() + "|" + f[0];
     const old = profileImgBuf.get(key);
     if (old) clearTimeout(old.timer);
-    profileImgBuf.set(key, { parts: new Array(total), got: 0, total, mime: f[2],
-        timer: setTimeout(() => profileImgBuf.delete(key), TRANSFER_TIMEOUT_MS) });
+    profileImgBuf.set(key, {
+        parts: new Array(total), got: 0, total, mime: f[2],
+        timer: setTimeout(() => profileImgBuf.delete(key), TRANSFER_TIMEOUT_MS)
+    });
 }
 
 // PFIC: name = username, payload = kind|index|data
@@ -2533,7 +2549,7 @@ function renderProfileView(p) {
     if (mine) aboutHead.append(mk("span", "prof-count", p.bio.length + "/" + PROF.bio));   // only you see your own counter
     about.append(aboutHead);
     about.append(p.bio ? mk("p", "prof-bio", p.bio)
-                      : mk("p", "prof-muted", mine ? "You haven't written a bio yet." : "No bio yet."));
+        : mk("p", "prof-muted", mine ? "You haven't written a bio yet." : "No bio yet."));
     body.append(about);
 
     if (p.links.length) {
@@ -2565,9 +2581,17 @@ function renderProfileView(p) {
         edit.type = "button";
         edit.addEventListener("click", startProfileEdit);
         actions.append(edit);
-        const account = mk("button", "prof-btn", "Account");
+
+        const account = mk("button", "prof-btn");   // no text label
         account.type = "button";
         account.title = "Change your username or password";
+        account.setAttribute("aria-label", "Account");
+        account.innerHTML = `
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <rect x="2.5" y="7" width="11" height="7.5" rx="1.8" fill="currentColor" />
+            <path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.8"
+                stroke-linecap="round" />
+        </svg>`;
         account.addEventListener("click", () => { closeProfile(); openAccount($("meOpen")); });
         actions.append(account);
     } else {
@@ -2588,11 +2612,13 @@ function startProfileEdit() {
     const rows = p.links.map((x) => ({ l: x.l, u: x.u }));
     while (rows.length < PROF.links) rows.push({ l: "", u: "" });
     swapProfile(() => {
-        profDraft = { thought: p.thought, bio: p.bio, links: rows, color: p.color,
-                      avatar: null, avatarGone: false, avatarPreview: "",
-                      backdrop: null, backdropGone: false, backdropPreview: "",
-                      backdropFile: null, backdropDims: null, backdropPos: { x: 0.5, y: 0.5 },
-                      saving: false, error: "" };
+        profDraft = {
+            thought: p.thought, bio: p.bio, links: rows, color: p.color,
+            avatar: null, avatarGone: false, avatarPreview: "",
+            backdrop: null, backdropGone: false, backdropPreview: "",
+            backdropFile: null, backdropDims: null, backdropPos: { x: 0.5, y: 0.5 },
+            saving: false, error: ""
+        };
         profEditing = true;
     }, 1, () => {
         const f = profileCard.querySelector("input[type=text]");
@@ -3163,7 +3189,7 @@ function reviewAccount() {
 
     if (!nameChanged && !pwChanged) {
         acctShowError(name !== "" ? "That is already your username. Type a different one, or choose a new password."
-                                  : "Type a new username, a new password, or both.", F.name);
+            : "Type a new username, a new password, or both.", F.name);
         return;
     }
     if (nameChanged) {
@@ -3344,7 +3370,7 @@ async function acceptAccount() {
     const f = result.flags || "";
     const text = f.indexOf("n") >= 0 && f.indexOf("p") >= 0 ? "Username and password updated"
         : f.indexOf("n") >= 0 ? "Username changed to " + result.name
-        : "Password updated";
+            : "Password updated";
     closeAcctConfirm();
     closeAccount();
     setTimeout(() => showAcctToast(text), 320);
