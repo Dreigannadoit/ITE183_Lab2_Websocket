@@ -1617,3 +1617,53 @@ textarea.edit-input {
 }
 textarea#msgInput { flex: 1; min-width: 0; }
 .composer { align-items: flex-end; }
+
+
+/* ------------------------------------------------------------
+   LOG IN <-> SIGN UP SWITCH
+   The moves themselves are played by login.js (Web Animations API). This is the static part:
+   the pieces it animates and the layers it draws on.
+------------------------------------------------------------ */
+
+/* BISCORD is split into one span per letter so each letter can hop on its own */
+.logo .ch { display: inline-block; }
+/* the tagline is split into words that fly out and in */
+.tagline .w { display: inline-block; }
+
+/* the mascot's face is animated part by part */
+.mascot .m-eye,
+.mascot .m-glint,
+.mascot .m-cheek,
+.mascot .m-mouth { transform-box: fill-box; transform-origin: center; }
+
+/* Both forms live in this box. While switching, its height is animated, and it clips the forms that
+   are flying in and out. The padding and the negative margin cancel each other out (the layout does not
+   move) but give the buttons' shadows and the focus rings room, so they are not clipped. */
+.auth-body.is-switching { overflow: hidden; padding: 18px; margin: -18px; pointer-events: none; }
+
+/* The yellow of the active tab is a layer that grows out of the spot you clicked (and drains away from
+   the tab you left). The press-down of the active tab is a transition, so it settles with a little bounce. */
+.auth-tab {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    transition: transform .3s cubic-bezier(.3, 1.8, .5, 1), box-shadow .3s ease;
+}
+.auth-tab::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--yellow);
+    clip-path: circle(0% at var(--fx, 50%) var(--fy, 50%));
+    transition: clip-path .6s cubic-bezier(.5, 0, .2, 1);
+}
+.auth-tab.active { background: var(--paper); }
+.auth-tab.active::before { clip-path: circle(200% at var(--fx, 50%) var(--fy, 50%)); }
+
+/* layers for the rings (behind the card) and the confetti (in front of everything) */
+.fx-layer { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
+.fx-back { z-index: 0; }
+.fx-front { z-index: 60; }
+.fx-ring { position: absolute; left: 0; top: 0; border-radius: 50%; border: 5px solid var(--ink); will-change: transform, opacity; }
+.fx-bit { position: absolute; left: 0; top: 0; border: 2px solid var(--ink); will-change: transform, opacity; }

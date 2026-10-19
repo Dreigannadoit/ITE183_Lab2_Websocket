@@ -21,6 +21,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 - **Profile cards**: click your own user card (bottom left) to see and edit your profile, or click any member in the panel to see theirs. A profile has a username, profile picture, backdrop, thought bubble, bio, up to 3 links and a card colour. Only you can change your own (see below).
 - **Member panel**: shows who is online and how many accounts are registered.
 - **Connection console**: a collapsible panel in the chat page that shows the raw packets, handy for debugging.
+- **Animated log in / sign up switch**: changing tabs plays a choreographed animation on the whole card: the tab fills with yellow from where you clicked and pops confetti, the mascot jumps and flips, the letters of BISCORD hop in a colour wave, the card lifts off its shadow, the tagline words fly out and in, and the form fields fly out one by one while the card springs to its new height. It can be interrupted at any time, and is skipped when the system has "reduce motion" turned on. The code is in `public/scripts/login.js`, the supporting styles at the end of `public/style.css`.
 - **Responsive layout**: works on phones and desktops.
 
 ### How it works
