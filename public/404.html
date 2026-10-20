@@ -1,13 +1,121 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 - Page Not Found</title>
+    <title>BISCORD | 404 - Page Not Found</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap"
+        rel="stylesheet">
+
+    <!-- absolute path: this page is served for any unknown URL, even deep ones like /a/b/c -->
+    <link rel="stylesheet" href="/style.css">
+    <!-- page transitions: must load in the head so the new page is covered from its first frame -->
+    <script src="/scripts/transition.js"></script>
+    <style>
+        .notfound-code {
+            font-size: 96px;
+            margin-bottom: 10px;
+        }
+
+        .notfound-card .tagline {
+            margin-bottom: 8px;
+        }
+
+        .notfound-card .hint {
+            margin: 0 0 26px;
+            text-align: center;
+        }
+
+        .notfound-actions {
+            display: flex;
+            justify-content: center;
+        }
+
+        .notfound-actions .btn {
+            display: inline-block;
+            text-decoration: none;
+            text-align: center;
+        }
+
+        .mascot .tear {
+            animation: tear 1.6s ease-in infinite;
+            transform-box: fill-box;
+            transform-origin: 50% 0;
+        }
+
+        @keyframes tear {
+            0% {
+                transform: translateY(-4px) scale(.6);
+                opacity: 0;
+            }
+
+            25% {
+                opacity: 1;
+            }
+
+            100% {
+                transform: translateY(16px) scale(1);
+                opacity: 0;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .notfound-code {
+                font-size: 80px;
+            }
+        }
+    </style>
 </head>
+
 <body>
-    <h1>404 - Page Not Found</h1>
-    <p>The requested resource could not be found on this
-server.</p>
+
+    <main id="joinScreen" class="screen active">
+        <section class="join-card notfound-card">
+            <svg class="mascot" viewBox="0 0 120 110" aria-hidden="true">
+                <path
+                    d="M20 10 H100 Q112 10 112 22 V66 Q112 78 100 78 H66 L46 100 L48 78 H20 Q8 78 8 66 V22 Q8 10 20 10 Z"
+                    fill="#FFD23F" stroke="#1B1230" stroke-width="6" stroke-linejoin="round" />
+                <!-- worried eyes -->
+                <ellipse cx="40" cy="40" rx="7" ry="10" fill="#1B1230" />
+                <ellipse cx="80" cy="40" rx="7" ry="10" fill="#1B1230" />
+                <circle cx="42" cy="35" r="3" fill="#fff" />
+                <circle cx="82" cy="35" r="3" fill="#fff" />
+                <path d="M30 24 L50 29 M90 24 L70 29" stroke="#1B1230" stroke-width="4" stroke-linecap="round" />
+                <circle cx="26" cy="56" r="6" fill="#FF6FA5" />
+                <circle cx="94" cy="56" r="6" fill="#FF6FA5" />
+                <!-- frown -->
+                <path d="M46 65 Q60 53 74 65" fill="none" stroke="#1B1230" stroke-width="5" stroke-linecap="round" />
+                <!-- tear -->
+                <path class="tear" d="M88 48 Q93 56 88 60 Q83 56 88 48 Z" fill="#5CCBFF" stroke="#1B1230"
+                    stroke-width="2.5" stroke-linejoin="round" />
+            </svg>
+
+            <h1 class="logo notfound-code">404</h1>
+            <p class="tagline">Oops! This page wandered off.</p>
+            <p class="hint">The page you were looking for could not be found on this server.</p>
+
+            <div class="notfound-actions">
+                <a class="btn blue" href="/">Back to BISCORD</a>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const tag = String.raw`
+________ _____________________.___     _____ __________    _____      _____ __________ 
+\______ \\______   \_   _____/|   |   /  _  \\______   \  /     \    /  _  \\______   \
+ |    |  \|       _/|    __)_ |   |  /  /_\  \|    |  _/ /  \ /  \  /  /_\  \|    |  _/
+ |    |   \    |   \|        \|   | /    |    \    |   \/    Y    \/    |    \    |   \
+/_______  /____|_  /_______  /|___| \____|__  /______  /\____|__  /\____|__  /______  /
+        \/       \/        \/               \/       \/         \/         \/       \/
+`;
+
+        console.log(tag);
+        console.log("Drei Abmab Studios (c) || 2026")
+    </script>
 </body>
+
 </html>

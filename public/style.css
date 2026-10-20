@@ -25,6 +25,39 @@
     --body: "Nunito", "Segoe UI", system-ui, sans-serif;
 }
 
+/* ------------------------------------------------------------
+   SCROLLBARS - same chunky look as the rest of the app:
+   a yellow 3D thumb with an ink outline running in a tinted track with an ink rail on its left.
+   Chrome / Edge / Safari use the ::-webkit-scrollbar parts; Firefox only allows colours, so it gets those.
+------------------------------------------------------------ */
+::-webkit-scrollbar { width: 16px; height: 16px; }
+::-webkit-scrollbar-track {
+    background: rgba(27, 18, 48, .1);
+    border-left: 3px solid var(--ink);
+}
+::-webkit-scrollbar:horizontal { height: 16px; }
+::-webkit-scrollbar-track:horizontal { border-left: 0; border-top: 3px solid var(--ink); }
+::-webkit-scrollbar-thumb {
+    min-height: 44px;
+    min-width: 44px;
+    background: var(--yellow);
+    border: 3px solid var(--ink);
+    border-radius: 999px;
+    box-shadow: inset 0 3px 0 #FFE388, inset 0 -3px 0 #BF9D2F;
+}
+::-webkit-scrollbar-thumb:hover { background: #FFE388; }
+::-webkit-scrollbar-thumb:active { background: var(--orange); box-shadow: inset 0 3px 0 #FFB066, inset 0 -3px 0 #C4651A; }
+::-webkit-scrollbar-corner { background: transparent; }
+ 
+/* the dark connection console gets a light rail so the track still reads against the ink background */
+.console-body::-webkit-scrollbar-track { background: rgba(255, 255, 255, .08); border-left-color: rgba(255, 255, 255, .22); }
+ 
+@supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: auto; scrollbar-color: var(--yellow) rgba(27, 18, 48, .18); }
+    .console-body { scrollbar-color: var(--yellow) rgba(255, 255, 255, .1); }
+}
+ 
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
@@ -126,7 +159,7 @@ body {
     box-shadow: 10px 10px 0 var(--ink);
     animation: pop .5s cubic-bezier(.3, 1.6, .5, 1) both;
 }
-@keyframes pop { from { transform: scale(.7) rotate(-4deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes pop { from { transform: scale(.3) rotate(-84deg); opacity: 0; } to { transform:  scale(.91); opacity: 1; } }
 
 .mascot {
     position: absolute;
@@ -271,6 +304,9 @@ body {
     border-radius: 18px;
     box-shadow: 0 5px 0 var(--ink);
 }
+.usercard .me-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border-radius: 12px; cursor: pointer; }
+.usercard { cursor: pointer; }
+.usercard:hover { transform: translateY(-1px); }
 .usercard .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .usercard .who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
 .usercard .btn.small { flex: none; padding: 4px 10px 6px; font-size: 14px; }
@@ -385,6 +421,7 @@ body {
 .msg.mine .bubble { border-radius: 18px 18px 6px 18px; }
 .msg.mine .gutter time { right: auto; left: 0; }
 .msg.mine.mention { box-shadow: inset -5px 0 0 var(--orange); }
+
 
 .mention-tag { padding: 0 6px 1px; font-weight: 800; color: var(--ink); background: var(--sky); border: 2px solid var(--ink); border-radius: 8px; }
 .mention-tag.me { background: var(--yellow); }
@@ -559,7 +596,8 @@ body {
     border-left: var(--line) solid var(--ink);
     z-index: 3;
 }
-.panel h2 { margin: 0 0 16px 4px; font-family: var(--display); font-weight: 400; font-size: 22px; }
+.panel h2 { margin: 0 0 4px 4px; font-family: var(--display); font-weight: 400; font-size: 22px; }
+.panel-sub { margin: 0 0 16px 4px; font-size: 13px; font-weight: 800; }
 .panel ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
 .member {
     width: 100%;
@@ -581,6 +619,9 @@ body {
 .member:hover { transform: translateY(-2px); box-shadow: 0 6px 0 var(--ink); }
 .member:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--ink); }
 .member .avatar { width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
+/* online: highlighted in green. offline (registered, not here right now): greyscale */
+.member.active { background: var(--green); }
+.member.inactive { background: #E6E3EC; filter: grayscale(1); opacity: .75; }
 .you { margin-left: auto; font-size: 12px; padding: 1px 8px; background: var(--yellow); border: 2px solid var(--ink); border-radius: 999px; }
 
 .scrim { display: none; }
@@ -700,6 +741,1153 @@ body {
 .t-srv { color: var(--green); }
 .t-cli { color: var(--sky); }
 
+/* ---------- connection popup (bottom right) ---------- */
+.conn-toast {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;                      /* chat.js lifts it above the message box */
+    z-index: 11;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: calc(100vw - 28px);
+    padding: 12px 18px 12px 14px;
+    background: var(--yellow);
+    border: 3px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 0 6px 0 var(--ink);
+    font-weight: 800;
+    transform-origin: 100% 100%;
+}
+.conn-toast[hidden] { display: none; }
+.conn-toast[data-state="back"] { background: var(--green); }
+.conn-toast.entering { animation: toast-in .45s cubic-bezier(.3, 1.4, .5, 1) both; }
+.conn-toast.leaving { animation: toast-out .3s ease-in both; }
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(28px) scale(.85); }
+    to { opacity: 1; transform: none; }
+}
+@keyframes toast-out {
+    from { opacity: 1; transform: none; }
+    to { opacity: 0; transform: translateX(36px) scale(.9); }
+}
+.conn-icon {
+    position: relative;
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+}
+/* loading icon while we try to reconnect */
+.conn-toast[data-state="lost"] .conn-icon {
+    border: 4px solid rgba(27, 18, 48, .22);
+    border-top-color: var(--ink);
+    animation: toast-spin .8s linear infinite;
+}
+@keyframes toast-spin { to { transform: rotate(360deg); } }
+/* tick once we are back */
+.conn-toast[data-state="back"] .conn-icon { background: var(--white); border: 3px solid var(--ink); }
+.conn-toast[data-state="back"] .conn-icon::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 1px;
+    width: 5px;
+    height: 10px;
+    border: solid var(--ink);
+    border-width: 0 3px 3px 0;
+    transform: rotate(45deg);
+}
+
+/* ---------- join popups (bottom right) ---------- */
+.join-toasts {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;                      /* chat.js lifts it above the message box (and the connection popup) */
+    z-index: 11;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    max-width: calc(100vw - 28px);
+    pointer-events: none;
+}
+.join-toast {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    padding: 7px 18px 8px 7px;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 999px;
+    box-shadow: 0 5px 0 var(--ink);
+    transform-origin: 100% 100%;
+    animation: toast-in .45s cubic-bezier(.3, 1.4, .5, 1) both;
+}
+.join-toast.leaving { animation: toast-out .3s ease-in both; }
+/* "left the chat" popups look the same, with a muted avatar so they read as a goodbye */
+.join-toast.leave { background: #ECE8F4; }
+.join-toast.leave .avatar { filter: grayscale(1); opacity: .75; }
+.join-toast .avatar { flex: none; width: 34px; height: 34px; font-size: 17px; box-shadow: 0 3px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
+
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ------------------------------------------------------------
+   EDIT / DELETE YOUR OWN MESSAGES
+   Only your own messages get these buttons (see makeActions in chat.js).
+------------------------------------------------------------ */
+/* The wrapper has the same width cap as the bubble. Without it a long message made the wrapper as wide as the whole chat
+   while the bubble inside stopped at 640px on its left side, leaving a gap between the bubble and the right edge. */
+.bwrap { position: relative; max-width: min(100%, 640px); min-width: 0; }
+.msg-actions {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 12px;
+    box-shadow: 0 3px 0 var(--ink);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s;
+}
+/* Beside the bubble, on the side that has room: left of your right-aligned messages ... */
+.msg.mine .msg-actions { right: calc(100% + 10px); }
+/* ... and right of the left-aligned ones (your own message sent from another tab). */
+.msg:not(.mine) .msg-actions { left: calc(100% + 10px); }
+.msg-actions[hidden] { display: none; }
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions,
+.msg-actions.confirming { opacity: 1; pointer-events: auto; }
+.msg.busy .msg-actions { display: none; }
+
+.act-btn {
+    display: grid;
+    place-items: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 6px;
+    font-family: var(--display);
+    font-size: 14px;
+    letter-spacing: .3px;
+    color: var(--ink);
+    background: var(--white);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.act-btn:hover, .act-btn:focus-visible { background: var(--yellow); border-color: var(--ink); outline: none; }
+.act-btn.danger:hover, .act-btn.danger:focus-visible { background: var(--pink); }
+.act-btn.text { display: block; line-height: 24px; }
+.act-ask { padding: 0 6px; font-size: 13px; font-weight: 800; white-space: nowrap; }
+
+.edited-note { padding: 0 6px; font-size: 11px; font-weight: 700; color: #5b5273; }
+
+.edit-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: min(520px, 100%); }
+.edit-input { flex: 1 1 220px; min-width: 0; padding: 8px 12px; }
+.edit-hint { flex-basis: 100%; padding: 0 4px; font-size: 12px; color: #5b5273; }
+.msg.mine .edit-hint { text-align: right; }
+
+/* Narrow screens: the buttons sit under the bubble instead of beside it. */
+@media (max-width: 900px) {
+    .bwrap { display: flex; flex-direction: column; align-items: flex-end; }
+    .msg:not(.mine) .bwrap { align-items: flex-start; }
+    .msg-actions, .msg.mine .msg-actions, .msg:not(.mine) .msg-actions {
+        position: static;
+        transform: none;
+        margin-top: 8px;
+        box-shadow: none;
+    }
+}
+
+/* No hover on touch screens: always show the buttons on your own messages. */
+@media (hover: none) {
+    .msg-actions { opacity: 1; pointer-events: auto; }
+}
+
+
+/* ------------------------------------------------------------
+   PROFILE CARD  (matches the Figma "Pop_up" and "Edit_Pop_up" frames)
+   Opens from your own user card (bottom left) or from a member in the right-hand panel.
+   Fonts: Poppins for text, --prof-display for headings, names and buttons
+   (change --prof-display below if the Figma heading font is a different one).
+------------------------------------------------------------ */
+.prof-modal {
+    --prof-display: var(--display);
+    --prof-text: "Poppins", "Nunito", "Segoe UI", system-ui, sans-serif;
+    --prof-black: #000;
+    --prof-shadow: #1B1230;
+    --prof-muted: #B5B6C5;
+    --prof-count: #504F68;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(27, 18, 48, .72);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    perspective: 1400px;
+}
+.prof-modal[hidden] { display: none; }
+.prof-card {
+    position: relative;
+    width: min(518px, 100%);
+    max-height: 94dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    font-family: var(--prof-text);
+    font-weight: 400;
+    color: var(--prof-black);
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 22px;
+    box-shadow: 7px 7px 0 var(--prof-black);
+}
+
+/* backdrop picture across the top */
+.prof-banner {
+    position: relative;
+    z-index: 3;
+    aspect-ratio: 3 / 1;   /* same shape as the saved backdrop (BACKDROP_W x BACKDROP_H in chat.js), so what you see is what is saved */
+    background-color: var(--sky);
+    background-image: radial-gradient(rgba(255, 255, 255, .38) 2px, transparent 2.5px);
+    background-size: 18px 18px;
+    background-position: center;
+    border-bottom: 3px solid var(--prof-black);
+    border-radius: 19px 19px 0 0;
+}
+.prof-banner.has-img { background-size: cover; }
+.prof-banner-tools { position: absolute; top: 9px; right: 9px; display: flex; gap: 5px; }
+
+.prof-body { padding: 0 18px 22px; }
+
+/* picture + thought bubble */
+.prof-top { display: flex; align-items: flex-start; gap: 13px; }
+.prof-avatar-wrap { position: relative; z-index: 4; flex: none; width: 70px; height: 70px; margin-top: -25px; }
+.prof-avatar {
+    width: 70px;
+    height: 70px;
+    display: grid;
+    place-items: center;
+    font-family: var(--prof-display);
+    font-size: 34px;
+    color: var(--prof-black);
+    background-size: cover;
+    background-position: center;
+    border: 3px solid var(--prof-black);
+    border-radius: 50%;
+    box-shadow: 0 3px 0 var(--prof-black);
+}
+.prof-avatar.has-img { color: transparent; }
+.prof-avatar-tools { position: absolute; top: -7px; left: 44px; display: flex; gap: 4px; }
+
+.prof-thought {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    margin-top: 12px;
+    padding: 3px 12px 5px;
+    font-weight: 600;
+    font-size: 15px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 14px;
+    box-shadow: 0 3px 0 var(--prof-black);
+}
+.prof-thought::before, .prof-thought::after {
+    content: "";
+    position: absolute;
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 50%;
+    z-index: 99999;
+}
+.prof-thought::before { width: 15px; height: 15px; left: -12px; top: -9px; }
+.prof-thought::after { width: 9px; height: 9px; left: -21px; top: -17px; }
+.prof-thought.empty { color: #8d84a3; font-weight: 500; border-style: dashed; box-shadow: none; }
+
+.prof-name { margin: 8px 0 0; font-family: var(--prof-display); font-weight: 400; font-size: 32px; line-height: 1.1; letter-spacing: .3px; overflow-wrap: anywhere; }
+.prof-status { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.prof-status .pill { font-family: var(--prof-text); font-weight: 500; font-size: 12px; line-height: 1.5; padding: 0 9px 0 4px; gap: 3px; border-width: 3px; border-color: var(--prof-black); }
+.prof-status .dot { width: 14px; height: 14px; border-width: 2px; border-color: var(--prof-black); background: #D2822D; }
+.prof-status .pill[data-state="online"] .dot { background: #299C3A; }
+.prof-since { font-size: 12px; font-weight: 700; color: var(--prof-muted); }
+
+.prof-sec { margin-top: 14px; }
+.prof-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.prof-sec h3, .prof-head h3 { margin: 0 0 4px; font-family: var(--prof-display); font-weight: 400; font-size: 20px; line-height: 1.2; letter-spacing: .3px; }
+.prof-count { font-family: var(--prof-display); font-size: 14px; line-height: 1; letter-spacing: .3px; color: var(--prof-count); }
+.prof-bio { margin: 0; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.prof-muted { margin: 0; font-size: 14px; color: #8d84a3; font-weight: 500; }
+
+.prof-links { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.prof-links a {
+    display: block;
+    padding: 6px 14px 8px;
+    color: var(--prof-black);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+    background: var(--sky);
+    border: 3px solid var(--prof-black);
+    border-radius: 14px;
+    box-shadow: inset 0 3px 0 #4598BF;
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+.prof-links a:hover { filter: brightness(1.06); }
+.prof-links small { display: block; font-size: 14px; font-weight: 400; color: #333; }
+
+.prof-note { margin: 16px 0 0; font-weight: 600; text-align: center; }
+.prof-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+
+/* ----- 3D buttons (Edit Profile, SAVE, Cancel) ----- */
+.prof-btn {
+    --face: var(--yellow); --hi: #FFE388; --lo: #BF9D2F; --txt: var(--prof-black);
+    font-family: var(--prof-display);
+    font-size: 18px;
+    line-height: 1.2;
+    letter-spacing: .3px;
+    color: var(--txt);
+    background: var(--face);
+    border: 3px solid var(--prof-black);
+    border-radius: 12px;
+    padding: 4px 18px 6px;
+    min-width: 76px;
+    cursor: pointer;
+    box-shadow: inset 0 3px 0 var(--hi), inset 0 -3px 0 var(--lo), 0 5px 0 var(--prof-shadow);
+    transform: translateY(0);
+    transition: transform .08s, box-shadow .08s;
+}
+.prof-btn.blue { --face: #2D6BFF; --hi: #7DA3FF; --lo: #2250BF; --txt: var(--white); }
+.prof-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: inset 0 3px 0 var(--hi), inset 0 -3px 0 var(--lo), 0 7px 0 var(--prof-shadow); }
+.prof-btn:active:not(:disabled) { transform: translateY(4px); box-shadow: inset 0 3px 0 var(--hi), inset 0 -3px 0 var(--lo), 0 1px 0 var(--prof-shadow); }
+.prof-btn:disabled { --face: #D9D2C3; --hi: #ECE7DB; --lo: #B8B1A2; --txt: #7d7590; cursor: not-allowed; }
+
+/* ----- round icon buttons (change picture / remove picture / close) with a tooltip ----- */
+.prof-icon {
+    --face: var(--yellow); --hi: #FFE388; --lo: #BF9D2F;
+    position: relative;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    cursor: pointer;
+    background: var(--face);
+    border: 3px solid var(--prof-black);
+    border-radius: 50%;
+    box-shadow: inset 0 3px 0 var(--hi), inset 0 -3px 0 var(--lo), 0 3px 0 var(--prof-shadow);
+    transition: transform .08s, box-shadow .08s;
+}
+.prof-icon.red { --face: #D22D39; --hi: #E37D84; --lo: #9D222B; }
+.prof-icon::before {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+}
+.prof-icon.i-backdrop::before { background-image: url("data:image/png;base64,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"); }
+.prof-icon.i-avatar::before { background-image: url("data:image/png;base64,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"); }
+.prof-icon.red::before { inset: 7px; background-image: url("data:image/svg+xml,%3Csvg width=%2215%22 height=%2215%22 viewBox=%220 0 15 15%22 fill=%22none%22 xmlns=%22http://www.w3.org/2000/svg%22%3E %3Cpath d=%22M3.9054 0.882821C3.12435 0.101772 1.93351 0.169178 1.24559 1.03338C0.55767 1.89757 0.633165 3.23131 1.41421 4.01236L2.65981 2.44759L3.9054 0.882821ZM10.9091 13.5072C11.6901 14.2882 12.8809 14.2208 13.5689 13.3566C14.2568 12.4924 14.1813 11.1587 13.4002 10.3777L12.1546 11.9424L10.9091 13.5072ZM2.65981 2.44759L1.41421 4.01236L10.9091 13.5072L12.1546 11.9424L13.4002 10.3777L3.9054 0.882821L2.65981 2.44759Z%22 fill=%22white%22/%3E %3Cpath d=%22M1.28094 10.0393C0.499891 10.8203 0.424397 12.154 1.11232 13.0182C1.80024 13.8824 2.99108 13.9498 3.77212 13.1688L2.52653 11.604L1.28094 10.0393ZM13.267 3.67396C14.048 2.89291 14.1235 1.55917 13.4356 0.694973C12.7477 -0.169225 11.5568 -0.236631 10.7758 0.544418L12.0214 2.10919L13.267 3.67396ZM2.52653 11.604L3.77212 13.1688L13.267 3.67396L12.0214 2.10919L10.7758 0.544418L1.28094 10.0393L2.52653 11.604Z%22 fill=%22white%22/%3E %3C/svg%3E"); }
+.prof-icon:hover:not([aria-disabled="true"]) { transform: translateY(-1px); }
+.prof-icon:active:not([aria-disabled="true"]) { transform: translateY(2px); box-shadow: inset 0 3px 0 var(--hi), inset 0 -3px 0 var(--lo), 0 1px 0 var(--prof-shadow); }
+.prof-icon[aria-disabled="true"] { cursor: not-allowed; filter: grayscale(1); opacity: .55; }
+
+/* tooltip: says what the button does ("Remove backdrop image", "Close profile", ...) */
+.prof-icon::after {
+    content: attr(data-tip);
+    position: absolute;
+    top: calc(100% + 9px);
+    left: 50%;
+    z-index: 10;
+    padding: 3px 10px 4px;
+    font-family: var(--prof-text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: nowrap;
+    color: var(--white);
+    background: var(--prof-shadow);
+    border: 2px solid var(--prof-black);
+    border-radius: 8px;
+    transform: translate(-50%, -3px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s, transform .12s;
+}
+.prof-icon.tip-end::after { left: auto; right: -3px; transform: translate(0, -3px); }
+.prof-icon:hover::after, .prof-icon:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+.prof-icon.tip-end:hover::after, .prof-icon.tip-end:focus-visible::after { transform: translate(0, 0); }
+@media (hover: none) { .prof-icon:hover::after { opacity: 0; } }
+
+/* ----- edit form ----- */
+.prof-form .field {
+    font-family: var(--prof-text);
+    font-weight: 600;
+    font-size: 15px;
+    padding: 3px 11px 5px;
+    color: var(--prof-black);
+    border: 3px solid var(--prof-black);
+    border-radius: 12px;
+    box-shadow: inset 0 3px 0 #BFBFBF;
+}
+.prof-form .field::placeholder { color: #BDBDCB; font-weight: 500; }
+.prof-form .field:disabled { background: #EEE8D8; }
+.prof-form textarea.field { resize: vertical; min-height: 78px; padding-top: 6px; line-height: 1.4; }
+.prof-form .prof-top .field { flex: 1; width: auto; min-width: 0; margin-top: 7px; }
+.prof-form .prof-top { gap: 6px; }
+.prof-form .prof-avatar-wrap { margin-top: -30px; }
+.prof-form label, .prof-form .lbl { display: block; margin: 0; font-family: var(--prof-display); font-size: 16px; letter-spacing: .3px; }
+.prof-form .prof-head { margin-top: 10px; margin-bottom: 4px; }
+.prof-form .lbl { margin: 14px 0 5px; }
+.prof-link-row { display: grid; grid-template-columns: 9fr 20fr; gap: 8px; margin-bottom: 7px; }
+.prof-error { margin: 12px 0 0; padding: 8px 12px; font-size: 14px; font-weight: 600; background: var(--pink); border: 3px solid var(--prof-black); border-radius: 12px; }
+.prof-error[hidden] { display: none; }
+.prof-file { display: none; }
+.prof-form .prof-actions { margin-top: 14px; gap: 12px; }
+
+/* ------------------------------------------------------------
+   PROFILE CARD ANIMATIONS
+   open:   backdrop fades + blurs in, the card tips up and springs into place, then every piece of it
+           (banner, picture, thought bubble, name, status, sections, links, buttons) flies in one after another
+   close:  the pieces sink away in reverse order while the card tilts back and drops out
+   switch: view <-> edit slides the old content away, glides the card to its new height and flies the new content in
+   chat.js numbers the pieces (--i) and sets each start delay (--d), --dx is the slide direction, --n the piece count.
+------------------------------------------------------------ */
+.prof-modal:not([hidden]) { animation: prof-backdrop-in .4s ease both; }
+.prof-modal:not([hidden]) .prof-card { animation: prof-card-in .8s cubic-bezier(.2, 1.25, .4, 1) backwards; transform-origin: 50% 100%; }
+
+/* --- pieces flying in --- */
+.prof-card.is-in .stg { animation: prof-rise .62s cubic-bezier(.2, 1.2, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+
+/* backdrop picture: wipes down from the top with a shine sweeping across */
+.prof-card[data-intro="open"].is-in .prof-banner.stg { animation: prof-banner-wipe .85s cubic-bezier(.2, .9, .3, 1) backwards; animation-delay: var(--d, 0ms); transform-origin: 50% 0; }
+.prof-card[data-intro="swap"].is-in .prof-banner.stg { animation: prof-banner-flash .6s ease-out backwards; animation-delay: var(--d, 0ms); }
+.prof-banner::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateX(-120%);
+    background: linear-gradient(105deg, transparent 36%, rgba(255, 255, 255, .6) 50%, transparent 64%);
+}
+.prof-card.is-in .prof-banner::after { animation: prof-shine 1s ease-out backwards; animation-delay: calc(var(--d, 0ms) + 380ms); }
+
+/* picture: spins and pops up, then a ring ripples out of it */
+.prof-card[data-intro="open"].is-in .prof-avatar-wrap.stg { animation: prof-avatar-in .85s cubic-bezier(.2, 1.5, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+.prof-card[data-intro="swap"].is-in .prof-avatar-wrap.stg { animation: prof-bump .6s cubic-bezier(.2, 1.7, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+.prof-avatar-wrap::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border: 3px solid var(--blue);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+}
+.prof-card.is-in .prof-avatar-wrap::after { animation: prof-ring .9s ease-out backwards; animation-delay: calc(var(--d, 0ms) + 320ms); }
+
+/* thought bubble: the two little bubbles pop first, then the big one grows out of them */
+.prof-card.is-in .prof-thought.stg { animation: prof-bubble .6s cubic-bezier(.2, 1.6, .4, 1) backwards; animation-delay: calc(var(--d, 0ms) + 140ms); transform-origin: 0 0; }
+.prof-card.is-in .prof-thought::before { animation: prof-dot .45s cubic-bezier(.2, 1.8, .4, 1) backwards; animation-delay: calc(var(--d, 0ms) + 60ms); }
+.prof-card.is-in .prof-thought::after { animation: prof-dot .45s cubic-bezier(.2, 1.8, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+
+/* name slides in with a lean, status dot pings */
+.prof-card.is-in .prof-name.stg { animation: prof-name-in .65s cubic-bezier(.2, 1.3, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+.prof-card.is-in .prof-status .pill[data-state="online"] .dot { animation: prof-ping 1.1s ease-out 2 backwards; animation-delay: calc(var(--d, 0ms) + 450ms); }
+
+/* buttons drop in with a bounce */
+.prof-card.is-in .prof-actions .prof-btn.stg { animation: prof-btn-in .6s cubic-bezier(.2, 1.7, .4, 1) backwards; animation-delay: var(--d, 0ms); }
+
+/* an error message shakes when it shows up */
+.prof-error:not([hidden]) { animation: prof-shake .5s ease both; }
+
+/* --- view <-> edit --- */
+.prof-card.is-resizing { overflow: hidden; transition: height .6s cubic-bezier(.3, 1.2, .4, 1); }
+.prof-card.is-swap-out { pointer-events: none; }
+.prof-card.is-swap-out .stg:not(.prof-banner):not(.prof-avatar-wrap) { animation: prof-swap-out .22s ease-in both; animation-delay: calc(var(--i, 0) * 9ms); }
+
+/* --- closing --- */
+.prof-modal.is-closing { animation: prof-backdrop-out .4s ease-in both; pointer-events: none; }
+.prof-modal.is-closing .prof-card { animation: prof-card-out .42s cubic-bezier(.5, 0, .75, .4) both; transform-origin: 50% 100%; }
+.prof-card.is-out .stg { animation: prof-sink .24s ease-in both; animation-delay: calc((var(--n, 8) - var(--i, 0)) * 10ms); }
+.prof-card.is-out .prof-banner::after, .prof-card.is-out .prof-avatar-wrap::after { animation: none; }
+
+@keyframes prof-backdrop-in {
+    from { background-color: rgba(27, 18, 48, 0); -webkit-backdrop-filter: blur(0); backdrop-filter: blur(0); }
+}
+@keyframes prof-backdrop-out {
+    to { background-color: rgba(27, 18, 48, 0); -webkit-backdrop-filter: blur(0); backdrop-filter: blur(0); }
+}
+@keyframes prof-card-in {
+    0% { opacity: 0; transform: translateY(80px) scale(.74) rotateX(26deg) rotate(-3deg); box-shadow: 0 0 0 var(--prof-black); }
+    35% { opacity: 1; }
+    100% { transform: none; box-shadow: 7px 7px 0 var(--prof-black); }
+}
+@keyframes prof-card-out {
+    35% { transform: translateY(-8px) scale(1.01); opacity: 1; }
+    100% { opacity: 0; transform: translateY(60px) scale(.8) rotateX(-20deg) rotate(2deg); box-shadow: 0 0 0 var(--prof-black); }
+}
+@keyframes prof-rise {
+    from { opacity: 0; transform: translate(calc(var(--dx, 0) * 36px), calc(var(--dy, 22) * 1px)) scale(.94); filter: blur(5px); }
+}
+@keyframes prof-sink {
+    to { opacity: 0; transform: translateY(16px) scale(.93); filter: blur(3px); }
+}
+@keyframes prof-swap-out {
+    to { opacity: 0; transform: translateX(calc(var(--dx, 1) * -34px)) scale(.95); filter: blur(4px); }
+}
+@keyframes prof-banner-wipe {
+    from { clip-path: inset(0 0 100% 0 round 19px 19px 0 0); transform: scaleY(1.2); filter: saturate(0) brightness(1.5); }
+    to { clip-path: inset(0 0 0 0 round 19px 19px 0 0); }
+}
+@keyframes prof-banner-flash {
+    0% { filter: brightness(1.5) saturate(.4); }
+    100% { filter: none; }
+}
+@keyframes prof-shine {
+    0% { opacity: 1; transform: translateX(-120%); }
+    100% { opacity: 1; transform: translateX(120%); }
+}
+@keyframes prof-avatar-in {
+    from { opacity: 0; transform: translateY(28px) scale(.2) rotate(-28deg); }
+}
+@keyframes prof-bump {
+    0% { transform: scale(.84) rotate(-8deg); }
+}
+@keyframes prof-ring {
+    0% { opacity: .9; transform: scale(.85); }
+    100% { opacity: 0; transform: scale(1.7); }
+}
+@keyframes prof-bubble {
+    from { opacity: 0; transform: scale(.15) translate(-14px, 10px); }
+}
+@keyframes prof-dot {
+    from { opacity: 0; transform: scale(0); }
+}
+@keyframes prof-name-in {
+    from { opacity: 0; transform: translateX(-26px) skewX(-10deg); filter: blur(5px); }
+}
+@keyframes prof-ping {
+    0% { box-shadow: 0 0 0 0 rgba(41, 156, 58, .75); }
+    100% { box-shadow: 0 0 0 10px rgba(41, 156, 58, 0); }
+}
+@keyframes prof-btn-in {
+    from { opacity: 0; transform: translateY(26px) scale(.8) rotate(-3deg); }
+}
+@keyframes prof-shake {
+    0% { opacity: 0; transform: translateY(-6px); }
+    25% { opacity: 1; transform: translateX(-7px); }
+    45% { transform: translateX(6px); }
+    65% { transform: translateX(-4px); }
+    85% { transform: translateX(2px); }
+    100% { transform: none; }
+}
+
+@media (max-width: 480px) {
+    .prof-link-row { grid-template-columns: 1fr 1.6fr; }
+    .prof-name { font-size: 30px; }
+}
+
+
+/* ------------------------------------------------------------
+   @MENTION SUGGESTIONS (type "@" in the message box)
+------------------------------------------------------------ */
+.composer { position: relative; }
+.mention-list {
+    position: absolute;
+    left: 16px;
+    bottom: calc(100% + 10px);
+    z-index: 30;
+    width: min(340px, calc(100% - 32px));
+    max-height: 264px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    box-shadow: 0 5px 0 var(--ink);
+}
+.mention-list[hidden] { display: none; }
+.mention-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 10px 5px 6px;
+    font-weight: 800;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    cursor: pointer;
+}
+.mention-item .avatar { width: 30px; height: 30px; font-size: 15px; box-shadow: 0 2px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .18), inset 2px 2px 0 rgba(255, 255, 255, .5); }
+.mention-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-item .nm b { background: var(--yellow); border-radius: 4px; font-weight: 800; }
+.mention-item .st { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #5b5273; }
+.mention-item .st i { width: 11px; height: 11px; background: #B9B2C9; border: 2px solid var(--ink); border-radius: 50%; }
+.mention-item.online .st i { background: var(--green); }
+.mention-item.offline .avatar { filter: grayscale(1); opacity: .8; }
+.mention-item[aria-selected="true"] { background: var(--sky); border-color: var(--ink); }
+.mention-empty { padding: 8px 12px; font-weight: 700; color: #5b5273; }
+
+/* ---------- thought bubble: floats left of a member while you hover it ---------- */
+/* Keyframe animations (not transitions): chat.js restarts them on every reveal, so the pop always plays. */
+.thought-tip {
+    --tail-y: 50%;
+    position: fixed;
+    z-index: 100000;                   /* above the drawers, popups, lightbox and the profile card */
+    left: 0;
+    top: 0;
+    width: max-content;
+    max-width: 260px;
+    padding: 8px 14px 10px;
+    font-family: var(--body);
+    font-weight: 800;
+    font-size: 15px;
+    line-height: 1.35;
+    text-align: left;
+    color: var(--ink);
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    box-shadow: 5px 5px 0 var(--ink), inset 0 -4px 0 rgba(27, 18, 48, .08);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    pointer-events: none;              /* never steals the hover from the member */
+    opacity: 0;
+    visibility: hidden;
+    transform-origin: 100% var(--tail-y);
+}
+.thought-tip.show {
+    visibility: visible;
+    opacity: 1;
+    animation: thought-fade .14s ease-out both, thought-pop .45s cubic-bezier(.2, 1.7, .4, 1) both;
+}
+.thought-tip.leaving {
+    visibility: visible;
+    animation: thought-away .16s ease-in forwards;
+}
+/* the two little bubbles that lead from the big one to the member */
+.thought-tip::before, .thought-tip::after {
+    content: "";
+    position: absolute;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 50%;
+    box-shadow: 2px 2px 0 var(--ink);
+    transform: scale(0);
+}
+.thought-tip::before { width: 15px; height: 15px; right: -21px; top: calc(var(--tail-y) - 14px); }
+.thought-tip::after { width: 9px; height: 9px; right: -40px; top: calc(var(--tail-y) - 10px); }
+.thought-tip.show::before { animation: thought-dot .38s cubic-bezier(.2, 1.9, .4, 1) .1s both; }
+.thought-tip.show::after { animation: thought-dot .38s cubic-bezier(.2, 1.9, .4, 1) .18s both; }
+.thought-tip.leaving::before, .thought-tip.leaving::after { animation: thought-dot-away .1s ease-in forwards; }
+
+@keyframes thought-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes thought-pop { from { transform: translateX(16px) scale(.55); } to { transform: none; } }
+@keyframes thought-away { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(16px) scale(.55); } }
+@keyframes thought-dot { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes thought-dot-away { from { transform: scale(1); } to { transform: scale(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .thought-tip.show, .thought-tip.leaving,
+    .thought-tip.show::before, .thought-tip.show::after,
+    .thought-tip.leaving::before, .thought-tip.leaving::after { animation: none; }
+    .thought-tip.show::before, .thought-tip.show::after { transform: none; }
+    .thought-tip.leaving { opacity: 0; }
+}
+
+
+/* ------------------------------------------------------------
+   CHANNEL SWITCH ANIMATION
+   Played by playChannelSwitch() in chat.js when you pick another channel.
+   - sidebar:  the button you picked pops into place and its # wiggles
+   - header:   # spins in, the name and topic slide in, a colour sweep runs along the bottom edge
+   - messages: the newest ones fly in one after another (--i = order, --dir = 1 down the list / -1 up the list)
+   (prefers-reduced-motion switches all of this off, see the rule further up.)
+------------------------------------------------------------ */
+.channel { transition: background-color .15s, color .15s, border-color .15s, box-shadow .15s; }
+.channel.active { animation: chan-select .5s cubic-bezier(.2, 1.6, .4, 1) both; }
+.channel.active .hash { animation: chan-hash-wiggle .55s ease-out .08s both; }
+@keyframes chan-select {
+    0% { transform: translateX(-8px) scale(.93); }
+    55% { transform: translateX(4px) scale(1.04); }
+    100% { transform: none; }
+}
+@keyframes chan-hash-wiggle {
+    0% { transform: rotate(0); }
+    30% { transform: rotate(-24deg) scale(1.3); }
+    60% { transform: rotate(14deg) scale(1.1); }
+    100% { transform: none; }
+}
+
+/* header */
+.chanbar { position: relative; }
+.chanbar::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -4px;                      /* covers the 4px ink border */
+    height: 4px;
+    pointer-events: none;
+    opacity: 0;
+    background: linear-gradient(90deg, var(--yellow), var(--pink), var(--sky)) no-repeat;
+    background-size: 40% 100%;
+    background-position: -150% 0;
+}
+.chanbar.chan-swap::after { animation: chan-sweep .7s cubic-bezier(.4, 0, .2, 1) both; }
+.chanbar.chan-swap .hash { animation: chan-hash-in .6s cubic-bezier(.2, 1.7, .4, 1) both; }
+.chanbar.chan-swap h2 { animation: chan-name-in .5s cubic-bezier(.2, 1.4, .4, 1) .05s both; }
+.chanbar.chan-swap .topic { animation: chan-topic-in .45s ease-out .16s both; }
+@keyframes chan-sweep {
+    0% { opacity: 1; background-position: -150% 0; }
+    90% { opacity: 1; }
+    100% { opacity: 0; background-position: 250% 0; }
+}
+@keyframes chan-hash-in {
+    from { opacity: 0; transform: rotate(calc(var(--dir, 1) * -140deg)) scale(.3); }
+}
+@keyframes chan-name-in {
+    from { opacity: 0; transform: translateY(calc(var(--dir, 1) * 16px)) skewX(calc(var(--dir, 1) * -8deg)); }
+}
+@keyframes chan-topic-in {
+    from { opacity: 0; transform: translateX(-12px); }
+}
+
+/* messages (overrides the single-message "slide" animation while a switch is playing) */
+.log.chan-in > :not(.typing) {
+    animation: chan-row-in .55s cubic-bezier(.2, 1.35, .4, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 40ms);
+}
+.log.chan-in > [data-still] { animation: none; }
+@keyframes chan-row-in {
+    from {
+        opacity: 0;
+        transform: translateY(calc(var(--dir, 1) * 36px)) scale(.94) rotate(calc(var(--dir, 1) * -1.2deg));
+    }
+}
+
+
+/* ------------------------------------------------------------
+   PAGE TRANSITIONS  (login <-> chat <-> 404)
+   Built by scripts/transition.js, which adds these classes to <html>:
+     pt-leaving   the curtain grows over the page from where you clicked (four coloured rings, one after another)
+     pt-arriving  the new page starts covered ...
+     pt-reveal    ... and the curtain shrinks away to show it
+     pt-came      the page was opened through a transition (stays on)
+   --x / --y (set on .pt-curtain) is where the curtain starts growing; --k orders the layers.
+   (prefers-reduced-motion: transition.js skips all of this and just navigates.)
+------------------------------------------------------------ */
+.pt-curtain {
+    position: fixed;
+    inset: 0;
+    z-index: 100001;                   /* above everything, even the thought bubble */
+    overflow: hidden;
+    pointer-events: none;
+    visibility: hidden;
+}
+html.pt-leaving .pt-curtain, html.pt-arriving .pt-curtain { visibility: visible; }
+html.pt-leaving .pt-curtain { pointer-events: auto; }   /* no clicks while we are leaving */
+
+.pt-layer { position: absolute; inset: 0; display: block; clip-path: circle(0 at 50% 50%); }
+.pt-layer.l1 { --k: 0; background: var(--yellow); }
+.pt-layer.l2 { --k: 1; background: var(--pink); }
+.pt-layer.l3 { --k: 2; background: var(--sky); }
+.pt-layer.l4 {
+    --k: 3;
+    background-color: var(--blue);
+    background-image: radial-gradient(rgba(255, 255, 255, .2) 2px, transparent 2.5px);
+    background-size: 26px 26px;
+}
+
+/* closing: each ring grows a little after the one below it */
+html.pt-leaving .pt-layer {
+    animation: pt-cover .42s cubic-bezier(.65, 0, .25, 1) both;
+    animation-delay: calc(var(--k) * 60ms);
+}
+/* opening: the top ring leaves first */
+html.pt-arriving .pt-layer { clip-path: circle(150vmax at 50% 50%); }
+html.pt-arriving.pt-reveal .pt-layer {
+    animation: pt-uncover .42s cubic-bezier(.65, 0, .25, 1) both;
+    animation-delay: calc((3 - var(--k)) * 60ms);
+}
+@keyframes pt-cover {
+    from { clip-path: circle(0 at var(--x, 50%) var(--y, 50%)); }
+    to { clip-path: circle(150vmax at var(--x, 50%) var(--y, 50%)); }
+}
+@keyframes pt-uncover {
+    from { clip-path: circle(150vmax at 50% 50%); }
+    to { clip-path: circle(0 at 50% 50%); }
+}
+
+/* the mascot in the middle of the curtain */
+.pt-badge {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 120px;
+    margin: -55px 0 0 -60px;
+    opacity: 0;
+    filter: drop-shadow(5px 5px 0 var(--ink));
+}
+html.pt-leaving .pt-badge {
+    animation: pt-badge-in .5s cubic-bezier(.2, 1.7, .4, 1) .32s both, pt-bob 1s ease-in-out .85s infinite;
+}
+html.pt-arriving .pt-badge { opacity: 1; transform: rotate(-5deg); }
+html.pt-arriving.pt-reveal .pt-badge { animation: pt-badge-out .28s ease-in both; }
+@keyframes pt-badge-in {
+    from { opacity: 0; transform: scale(.2) rotate(-24deg); }
+    to { opacity: 1; transform: rotate(-5deg); }
+}
+@keyframes pt-badge-out {
+    from { opacity: 1; transform: rotate(-5deg); }
+    to { opacity: 0; transform: scale(.2) rotate(18deg); }
+}
+@keyframes pt-bob { 50% { translate: 0 -10px; } }
+
+/* a page that was opened through the curtain pops its card in once the curtain is nearly gone */
+html.pt-came .join-card { animation: pop .55s cubic-bezier(.3, 1.6, .5, 1) .5s both; }
+
+/* the chat opens: the two side columns slide in and the middle rises (wide screens; on small screens they are drawers) */
+#chatScreen.active .main { animation: pt-rise .6s cubic-bezier(.2, 1.2, .4, 1) .05s backwards; }
+@media (min-width: 901px) {
+    #chatScreen.active .channels { animation: pt-from-left .65s cubic-bezier(.2, 1.2, .4, 1) backwards; }
+    #chatScreen.active .panel { animation: pt-from-right .65s cubic-bezier(.2, 1.2, .4, 1) .1s backwards; }
+}
+@keyframes pt-rise { from { opacity: 0; transform: translateY(28px) scale(.98); } }
+@keyframes pt-from-left { from { opacity: 0; transform: translateX(-60px); } }
+@keyframes pt-from-right { from { opacity: 0; transform: translateX(60px); } }
+
+/* ----- adjusting the backdrop position (profile edit, see enableBackdropReposition in chat.js) ----- */
+.prof-banner.can-move { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.prof-banner.can-move.moving { cursor: grabbing; }
+.prof-banner.can-move:focus-visible { outline-offset: -7px; }
+.prof-banner-hint {
+    position: absolute;
+    left: 9px;
+    top: 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 11px 3px 8px;
+    font-family: var(--prof-text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--prof-black);
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 999px;
+    box-shadow: 0 3px 0 var(--prof-shadow);
+    pointer-events: none;
+    transition: opacity .2s, transform .2s;
+}
+.prof-banner.moving .prof-banner-hint, .prof-banner-hint.used { opacity: 0; transform: translateY(6px); }
+
+/* ------------------------------------------------------------
+   MULTI-LINE MESSAGE BOX (Ctrl+Enter adds a line, the box grows)
+------------------------------------------------------------ */
+textarea#msgInput,
+textarea.edit-input {
+    display: block;
+    resize: none;
+    overflow-y: auto;
+    line-height: 1.35;
+    max-height: 160px;
+}
+textarea#msgInput { flex: 1; min-width: 0; }
+.composer { align-items: flex-end; }
+
+
+/* ------------------------------------------------------------
+   LOG IN <-> SIGN UP SWITCH
+   The moves themselves are played by login.js (Web Animations API). This is the static part:
+   the pieces it animates and the layers it draws on.
+------------------------------------------------------------ */
+
+/* BISCORD is split into one span per letter so each letter can hop on its own */
+.logo .ch { display: inline-block; }
+/* the tagline is split into words that fly out and in */
+.tagline .w { display: inline-block; }
+
+/* the mascot's face is animated part by part */
+.mascot .m-eye,
+.mascot .m-glint,
+.mascot .m-cheek,
+.mascot .m-mouth { transform-box: fill-box; transform-origin: center; }
+
+/* Both forms live in this box. While switching, its height is animated, and it clips the forms that
+   are flying in and out. The padding and the negative margin cancel each other out (the layout does not
+   move) but give the buttons' shadows and the focus rings room, so they are not clipped. */
+.auth-body.is-switching { overflow: hidden; padding: 18px; margin: -18px; pointer-events: none; }
+
+/* The yellow of the active tab is a layer that grows out of the spot you clicked (and drains away from
+   the tab you left). The press-down of the active tab is a transition, so it settles with a little bounce. */
+.auth-tab {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    transition: transform .3s cubic-bezier(.3, 1.8, .5, 1), box-shadow .3s ease;
+}
+.auth-tab::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--yellow);
+    clip-path: circle(0% at var(--fx, 50%) var(--fy, 50%));
+    transition: clip-path .6s cubic-bezier(.5, 0, .2, 1);
+}
+.auth-tab.active { background: var(--paper); }
+.auth-tab.active::before { clip-path: circle(200% at var(--fx, 50%) var(--fy, 50%)); }
+
+/* layers for the rings (behind the card) and the confetti (in front of everything) */
+.fx-layer { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
+.fx-back { z-index: 0; }
+.fx-front { z-index: 60; }
+.fx-ring { position: absolute; left: 0; top: 0; border-radius: 50%; border: 5px solid var(--ink); will-change: transform, opacity; }
+.fx-bit { position: absolute; left: 0; top: 0; border: 2px solid var(--ink); will-change: transform, opacity; }
+
+/* ------------------------------------------------------------
+   ACCOUNT SETTINGS  (username + password)
+   Its own pop-up, separate from the profile card (bio, backdrop, picture...). Opened with the lock button next to
+   Log out, or the "Account" button on your own profile card. Saving first opens a second pop-up on top
+   ("Accept these changes?") with a summary of what will change. Built from the profile-card pieces
+   (.prof-modal, .prof-card, .prof-btn, .prof-icon, .prof-error), so it opens and closes with the same animations.
+   chat.js: "ACCOUNT SETTINGS" section.
+------------------------------------------------------------ */
+.usercard .acct-btn { background: var(--sky); }
+.usercard .acct-btn svg { display: block; }
+
+.acct-modal { z-index: 46; }
+.acct-modal.acct-confirm { z-index: 47; }
+.acct-card { width: min(460px, 100%); }
+.acct-card.acct-card-sm { width: min(430px, 100%); }
+
+.acct-head {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    min-height: 76px;
+    padding: 14px 66px 14px 20px;
+    color: var(--white);
+    background-color: var(--purple);
+    background-image: radial-gradient(rgba(255, 255, 255, .28) 2px, transparent 2.5px);
+    background-size: 18px 18px;
+    border-bottom: 3px solid var(--prof-black);
+    border-radius: 19px 19px 0 0;
+}
+.acct-head.warn { background-color: var(--orange); }
+.acct-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    font-family: var(--prof-display);
+    font-weight: 400;
+    font-size: 28px;
+    line-height: 1.05;
+    letter-spacing: .4px;
+    text-shadow: 0 3px 0 var(--prof-black);
+}
+.acct-lock, .acct-badge {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    color: var(--prof-black);
+    background: var(--yellow);
+    border: 3px solid var(--prof-black);
+    border-radius: 50%;
+    box-shadow: 0 3px 0 var(--prof-black);
+    text-shadow: none;
+}
+.acct-lock svg { display: block; }
+.acct-badge { font-size: 26px; line-height: 1; padding-bottom: 2px; }
+
+.acct-form, .acct-body { padding-top: 2px; }
+.acct-intro { margin: 12px 0 0; font-size: 14px; font-weight: 600; line-height: 1.45; color: var(--prof-count); }
+
+.acct-sec {
+    margin-top: 12px;
+    padding: 8px 14px 12px;
+    background: #FFF9E8;
+    border: 3px solid var(--prof-black);
+    border-radius: 16px;
+    box-shadow: 0 4px 0 var(--prof-black);
+}
+.acct-sec h3 { margin: 0 0 2px; font-family: var(--prof-display); font-weight: 400; font-size: 20px; line-height: 1.2; letter-spacing: .3px; }
+.acct-form .acct-sec .lbl { margin: 10px 0 5px; font-size: 15px; }
+.acct-sec .field { width: 100%; background: var(--white); }
+.acct-sec .field + .lbl { margin-top: 12px; }
+.acct-now { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--prof-count); overflow-wrap: anywhere; }
+.acct-now b { color: var(--prof-black); }
+.acct-hint { margin: 5px 2px 0; font-size: 12px; font-weight: 600; color: #6b6585; }
+.acct-form .acct-check {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: fit-content;
+    margin: 14px 0 0;
+    font-family: var(--prof-text);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0;
+    cursor: pointer;
+}
+.acct-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); cursor: pointer; }
+
+/* the summary in the "Accept these changes?" pop-up */
+.acct-summary {
+    margin: 14px 0 0;
+    overflow: hidden;
+    background: var(--white);
+    border: 3px solid var(--prof-black);
+    border-radius: 16px;
+    box-shadow: 0 4px 0 var(--prof-black);
+}
+.acct-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: center; padding: 12px 14px; }
+.acct-row + .acct-row { border-top: 3px solid #E8E2D2; }
+.acct-key { font-family: var(--prof-display); font-size: 18px; line-height: 1.2; letter-spacing: .3px; }
+.acct-val { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.acct-chip { max-width: 100%; padding: 1px 11px 3px; font-weight: 700; background: #ECE8F4; border: 3px solid var(--prof-black); border-radius: 999px; }
+.acct-chip.old { color: #6b6585; text-decoration: line-through; text-decoration-thickness: 2px; }
+.acct-chip.new { background: var(--green); }
+.acct-arrow { font-family: var(--prof-display); font-size: 20px; line-height: 1; }
+.acct-same { font-weight: 600; color: #7d7590; }
+.acct-dots { font-size: 18px; letter-spacing: 2px; line-height: 1; }
+.acct-count { font-size: 12px; font-weight: 700; color: #6b6585; }
+.acct-tag { padding: 0 8px 1px; font-size: 12px; font-weight: 800; background: var(--yellow); border: 2px solid var(--prof-black); border-radius: 8px; }
+.acct-notes { margin: 14px 0 0; padding-left: 20px; font-size: 13.5px; font-weight: 600; line-height: 1.45; color: var(--prof-count); }
+.acct-notes li + li { margin-top: 4px; }
+
+.prof-btn.green { --face: #35D07F; --hi: #7BE5AE; --lo: #22A062; }
+.acct-body .prof-actions { margin-top: 18px; gap: 12px; }
+
+/* The form is tall: keep its buttons in view while the card scrolls */
+.acct-form .prof-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    margin: 14px -18px -22px;
+    padding: 12px 18px 18px;
+    background: var(--white);
+    border-top: 3px solid #E8E2D2;
+}
+
+/* the pieces fly in one after another when a pop-up opens (the --r number is set by chat.js) */
+.acct-modal:not([hidden]):not(.is-closing) .acct-sec,
+.acct-modal:not([hidden]):not(.is-closing) .acct-row,
+.acct-modal:not([hidden]):not(.is-closing) .acct-intro,
+.acct-modal:not([hidden]):not(.is-closing) .acct-notes,
+.acct-modal:not([hidden]):not(.is-closing) .prof-actions .prof-btn {
+    animation: prof-rise .6s cubic-bezier(.2, 1.2, .4, 1) backwards;
+    animation-delay: calc(.28s + var(--r, 0) * 80ms);
+}
+.acct-modal:not([hidden]):not(.is-closing) .acct-title { animation: prof-rise .6s cubic-bezier(.2, 1.4, .4, 1) .22s backwards; }
+.acct-modal:not([hidden]):not(.is-closing) .acct-lock,
+.acct-modal:not([hidden]):not(.is-closing) .acct-badge { animation: acct-pop .7s cubic-bezier(.2, 1.7, .4, 1) .3s backwards; }
+@keyframes acct-pop {
+    from { opacity: 0; transform: scale(.2) rotate(-40deg); }
+}
+
+/* "Username updated" popup (bottom right, shares the stack with the join popups) */
+.join-toast.acct-toast { padding-left: 8px; background: var(--green); }
+.acct-done { position: relative; flex: none; width: 30px; height: 30px; background: var(--white); border: 3px solid var(--ink); border-radius: 50%; }
+.acct-done::after {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 2px;
+    width: 7px;
+    height: 13px;
+    border: solid var(--ink);
+    border-width: 0 3px 3px 0;
+    border-radius: 1px;
+    transform: rotate(40deg);
+}
+
+@media (max-width: 480px) {
+    .acct-title { font-size: 24px; }
+    .acct-row { grid-template-columns: 1fr; gap: 6px; }
+}
+
+
+/* ------------------------------------------------------------
+   REPLIES
+   The "Replying to ..." bar above the message box, and the quote shown above a reply
+   (see "replying to messages" in chat.js).
+------------------------------------------------------------ */
+.reply-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--yellow);
+    border-top: var(--line) solid var(--ink);
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--ink);
+}
+.reply-bar[hidden] { display: none; }
+.reply-bar-body { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-bar-body b { font-family: var(--display); font-weight: 400; letter-spacing: .3px; }
+.reply-bar-text { margin-left: 10px; font-weight: 700; opacity: .7; }
+.reply-bar + .composer { border-top-width: 0; }
+.reply-bar .act-btn { flex: none; border-color: var(--ink); background: var(--white); }
+
+.reply-ref {
+    display: block;
+    max-width: 100%;
+    margin: 0 0 -6px;
+    padding: 5px 12px 11px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-align: left;
+    color: var(--ink);
+    background: #EFE7FF;
+    border: 3px solid var(--ink);
+    border-radius: 14px 14px 0 0;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.reply-ref b { margin-right: 8px; font-family: var(--display); font-weight: 400; letter-spacing: .3px; }
+.reply-ref .reply-text { opacity: .75; }
+.reply-ref:hover:not(:disabled), .reply-ref:focus-visible { background: var(--yellow); outline: none; }
+.reply-ref.gone, .reply-ref:disabled { cursor: default; font-style: italic; background: #E8E3F0; }
+.reply-ref + .bubble { position: relative; }
+
+.msg.flash .bubble { animation: replyFlash 1.5s ease-out; }
+@keyframes replyFlash {
+    0%, 40% { background: var(--yellow); color: var(--ink); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .msg.flash .bubble { animation: none; outline: 4px solid var(--orange); }
 }

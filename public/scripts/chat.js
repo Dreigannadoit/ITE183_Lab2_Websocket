@@ -1,0 +1,3591 @@
+// ==========================================
+// Property of (c) Drei Abmab || R.A BAMBA
+// ==========================================
+
+// BISCORD chat page. Loaded by chat.html, after common.js.
+// Logging in / signing up happens on the login page (login.html + login.js).
+// This page only asks the server "is this tab still logged in?" (RESUME) and, if not,
+// sends you back to the login page.
+
+// ---------- connection ----------
+// Chat history is handled by the server (app.bzg) over this same WebSocket.
+
+const AVATAR_COLORS = ["#35D07F", "#FF6FA5", "#5CCBFF", "#FF8A2B", "#8B5CF6"];
+const CLAIM_MS = 700;        // how long we wait for "taken" replies
+const HEARTBEAT_MS = 20000;  // how often we say "still here"
+const STALE_MS = 150000;     // forget people we haven't heard from
+const TYPING_REFRESH_MS = 2500; // how often we repeat "I'm typing"
+const TYPING_IDLE_MS = 3000;    // stop saying it after this much silence
+const TYPING_TTL_MS = 5000;     // hide someone's dots if we hear nothing for this long
+const GROUP_MS = 5 * 60 * 1000; // messages from one person within 5 minutes are grouped
+
+// Pictures. If pictures never arrive on your server, lower CHUNK_CHARS (try 800, then 400).
+const MAX_DIM = 1024;                     // longest side of a sent picture, in pixels
+const MAX_IMG_BYTES = 160 * 1024;         // a sent picture is squeezed to fit under this
+const MAX_RECV_BYTES = 400 * 1024;        // refuse bigger incoming pictures
+const CHUNK_CHARS = 1500;                 // size of one packet of picture data
+const CHUNK_PACKET_DELAY_MS = 5;          // short pause every few packets, to be gentle on the server
+const TRANSFER_TIMEOUT_MS = 15000;        // give up on a picture if nothing arrives for this long
+const MAX_STORE_BYTES = 40 * 1024 * 1024; // pictures kept in memory; the oldest are dropped past this
+const MIN_LOADING_MS = 350;               // so the loading animation is visible when a picture reloads
+const HIDDEN_UNLOAD_MS = 5000;            // free pictures when the tab has been hidden this long
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+// The channels are fixed. Add or rename them here.
+const CHANNELS = [
+    { id: "general", topic: "Say hi and hang out" },
+    { id: "random", topic: "Anything goes" },
+    { id: "help", topic: "Stuck on something? Ask here" },
+    { id: "memes", topic: "Only the good stuff" },
+    { id: "intro", topic: "Let's get to know each other better. Introduce yourself." },
+];
+
+// joinScreen is the small "getting your chat ready" card; chatScreen is the chat itself.
+const joinScreen = $("joinScreen"), chatScreen = $("chatScreen");
+const msgInput = $("msgInput"), sendBtn = $("sendBtn");
+
+// The message box is a <textarea> so a message can have several lines.
+// Enter sends; Ctrl+Enter (Cmd+Enter on a Mac) starts a new line. The box grows with its text.
+function insertNewline(box) {
+    const a = box.selectionStart, b = box.selectionEnd;
+    if (box.value.length - (b - a) + 1 > box.maxLength) return;      // no room left (maxlength counts the line break)
+    box.value = box.value.slice(0, a) + "\n" + box.value.slice(b);
+    box.setSelectionRange(a + 1, a + 1);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function autoGrow(box) {
+    box.style.height = "auto";
+    box.style.height = Math.min(box.scrollHeight + (box.offsetHeight - box.clientHeight), 160) + "px";
+}
+msgInput.addEventListener("input", () => autoGrow(msgInput));
+const logEl = $("log"), usersEl = $("users"), countEl = $("count");
+const totalEl = $("total");
+const panel = $("panel"), whoBtn = $("whoBtn"), chanBtn = $("chanBtn");
+const channelsEl = $("channels"), channelList = $("channelList"), scrim = $("scrim");
+const chanNameEl = $("chanName"), chanTopicEl = $("chanTopic");
+const welcomeEl = $("welcome"), welcomeTitle = $("welcomeTitle"), welcomeText = $("welcomeText");
+const typingEl = $("typing"), typingText = $("typingText");
+const attachBtn = $("attachBtn"), fileInput = $("fileInput"), dropHint = $("dropHint");
+const lightbox = $("lightbox"), lbImg = $("lbImg");
+
+// ---------- packet types ----------
+const PACKET_TYPES = ["CLAIM", "TAKEN", "HELLO", "HERE", "BYE", "MSG", "TYPING", "IMGH", "IMGC"];
+const HISTORY_WAIT_MS = 5000;      // how long we wait for saved chat before joining anyway
+const AUTH_WAIT_MS = 5000;         // how long we wait for the server to confirm the login
+let warnedUnknown = false;
+
+// The login page gave this tab its id and name. Without them we were never logged in here.
+const stored = loadSession();
+if (!stored) pageGo("/", { replace: true });
+const myId = stored ? stored.id : "";
+const mySecret = stored && stored.secret ? stored.secret : "";   // proves to the server that edit / delete come from this login
+
+let socket = null;
+let retryTimer = null;
+let retryDelay = 1000;
+let state = "connecting";
+let joined = false;
+let myName = "";
+let claim = null;            // { id, name, timer } while we wait to see if a name is free
+let authTimer = null;        // gives up if the server never confirms the login
+let resuming = false;        // true while we wait for the server to confirm the login
+let leaving = false;         // true once we are on our way back to the login page
+let historyBuf = null;       // saved messages arriving from the server: channel id -> [msg]
+let historyDone = null;      // called when the last saved message has arrived
+let historyTimer = null;
+const peers = new Map();     // id -> { name, seen }   (people online right now)
+const registered = new Map(); // lower-case name -> name   (every account, from the server)
+const askedAbout = new Set(); // names we already refreshed the account list for
+let usersBuf = null;         // account names arriving from the server (null = no request running)
+let usersTimer = null;
+let usersAgain = false;      // a new name showed up while a request was running
+let usersLoaded = false;
+const typers = new Map();    // id -> { name, ch, timer }  (people typing right now)
+let iAmTyping = false;
+let typingChannel = "general";
+let typingSentAt = 0;
+let typingIdleTimer = null;
+
+// Channel state. Every browser receives every message and keeps its own copy.
+const store = {};            // channel id -> { items: [], unread: 0, mentions: 0 }
+const drafts = {};           // channel id -> unsent text in the message box
+let current = "general";
+CHANNELS.forEach((c) => { store[c.id] = { items: [], unread: 0, mentions: 0 }; drafts[c.id] = ""; });
+
+const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+
+function setStatus(next) {
+    state = next;
+    const label = { online: "Connected", connecting: "Connecting", offline: "Offline" }[state];
+    [$("joinStatus"), $("chatStatus")].forEach((el) => {
+        el.dataset.state = state;
+        el.querySelector(".txt").textContent = label;
+    });
+    const online = state === "online";
+    msgInput.disabled = !(online && joined);
+    sendBtn.disabled = !(online && joined);
+    attachBtn.disabled = !(online && joined);
+}
+
+// Every packet looks like  TYPE|id|name|payload
+// For MSG the payload is  channel|text   and for TYPING it is  channel|1  or  channel|0
+function sendPacket(type, id, name, payload) {
+    return sendRaw(type + "|" + id + "|" + name + "|" + (payload || ""));
+}
+
+function sendRaw(text) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(text);
+        const m = parse(text);
+        if (QUIET_TYPES.indexOf(m.type) < 0) {
+            if (m.type === "MSG") {
+                const msg = splitMsg(m.payload);
+                logLine("Client", "#" + msg.ch + " " + msg.text);
+            } else if (m.type === "IMGH") {
+                const hd = splitPayload(m.payload);
+                const f = hd.text.split("|");
+                logLine("Client", "#" + hd.ch + " picture, " + Math.round(f[3] / 1024) + " KB in " + f[1] + " packets");
+            } else {
+                logLine("Client", text);
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+// "random|hello"  ->  { ch: "random", text: "hello" }
+// No known channel in front (older page)  ->  #general
+function splitPayload(payload) {
+    const k = payload.indexOf("|");
+    if (k > 0) {
+        const ch = payload.slice(0, k);
+        if (store[ch]) return { ch, text: payload.slice(k + 1) };
+    }
+    return { ch: "general", text: payload };
+}
+
+// MSG payload:  channel|messageId|text   ->  { ch, mid, reply, text }
+// For a reply the id slot is  messageId~replyToId  (the id of the message being answered).
+const MID_RE = /^[a-z0-9]{1,24}$/;
+const MID_REPLY_RE = /^([a-z0-9]{1,24})(?:~([a-z0-9]{1,24}))?$/;
+function splitMsg(payload) {
+    const a = splitPayload(payload);
+    const k = a.text.indexOf("|");
+    const idm = k > 0 ? MID_REPLY_RE.exec(a.text.slice(0, k)) : null;
+    if (idm) {
+        return { ch: a.ch, mid: idm[1], reply: idm[2] || "", text: a.text.slice(k + 1) };
+    }
+    return { ch: a.ch, mid: "", reply: "", text: a.text };
+}
+
+// "a|b|c|rest of it"  ->  ["a", "b", "c", "rest of it"]   (n fields, then whatever is left)
+function takeFields(s, n) {
+    const out = [];
+    let rest = s;
+    for (let i = 0; i < n; i++) {
+        const k = rest.indexOf("|");
+        if (k < 0) { out.push(rest); rest = ""; } else { out.push(rest.slice(0, k)); rest = rest.slice(k + 1); }
+    }
+    out.push(rest);
+    return out;
+}
+
+// Every message gets an id when it is sent. Everybody uses it to find that message again
+// when the author edits or deletes it.
+const newMsgId = () => "m" + newSecret().slice(0, 14);
+
+// ---------- connection popup ----------
+// One small popup in the bottom right corner instead of a line in the chat for every retry.
+// "lost": spinner + "Connection lost. Trying to reconnect..." stays up while we keep retrying.
+// "back": tick + "Reconnected", then it slides away on its own.
+const connToast = $("connToast"), connText = $("connText");
+const TOAST_BACK_MS = 1800;   // how long "Reconnected" stays before it leaves
+const TOAST_EXIT_MS = 320;    // a little longer than the exit animation
+let toastTimer = null, toastExitTimer = null;
+
+// "<name> joined the chat" popups. They stack in the same corner, just above the connection popup.
+const joinToasts = $("joinToasts");
+const JOIN_TOAST_MS = 4000;    // how long a join popup stays
+const MAX_JOIN_TOASTS = 4;     // more than this at once: the oldest goes
+
+// Sit just above the message box so it never covers the Send button.
+function placeToast() {
+    connToast.style.bottom = (($("chatForm").offsetHeight || 0) + 14) + "px";
+    placeJoinToasts();
+}
+
+function placeJoinToasts() {
+    const lift = connToast.hidden ? 0 : connToast.offsetHeight + 12;
+    joinToasts.style.bottom = (($("chatForm").offsetHeight || 0) + 14 + lift) + "px";
+}
+
+function showJoinToast(name) { showPresenceToast(name, " joined the chat", "join"); }
+function showLeaveToast(name) { showPresenceToast(name, " left the chat", "leave"); }
+
+// One popup for someone arriving or leaving. Both kinds share the same stack in the corner.
+function showPresenceToast(name, suffix, kind) {
+    placeJoinToasts();
+    while (joinToasts.children.length >= MAX_JOIN_TOASTS) joinToasts.firstElementChild.remove();
+    const t = document.createElement("div");
+    t.className = "join-toast " + kind;
+    const text = document.createElement("span");
+    const who = document.createElement("b");
+    who.textContent = name;
+    text.append(who, suffix);
+    t.append(makeAvatar(name), text);
+    joinToasts.append(t);
+    setTimeout(() => dismissJoinToast(t), JOIN_TOAST_MS);
+}
+
+function dismissJoinToast(t) {
+    if (!t.isConnected || t.classList.contains("leaving")) return;
+    t.classList.add("leaving");
+    setTimeout(() => t.remove(), TOAST_EXIT_MS);
+}
+window.addEventListener("resize", placeToast);
+if (window.ResizeObserver) new ResizeObserver(placeToast).observe($("chatForm"));
+
+function showConnToast(kind, text) {
+    clearTimeout(toastTimer);
+    clearTimeout(toastExitTimer);
+    connToast.dataset.state = kind;
+    connText.textContent = text;
+    placeToast();
+    if (connToast.hidden || connToast.classList.contains("leaving")) {
+        // (re)start the entrance animation. Already showing: just change the text and icon.
+        connToast.classList.remove("leaving", "entering");
+        connToast.hidden = false;
+        void connToast.offsetWidth;
+        connToast.classList.add("entering");
+        placeJoinToasts();
+    }
+}
+
+function hideConnToast() {
+    clearTimeout(toastTimer);
+    if (connToast.hidden) return;
+    connToast.classList.remove("entering");
+    connToast.classList.add("leaving");
+    clearTimeout(toastExitTimer);
+    toastExitTimer = setTimeout(() => {
+        connToast.hidden = true;
+        connToast.classList.remove("leaving");
+        placeJoinToasts();
+    }, TOAST_EXIT_MS);
+}
+
+function connect() {
+    setStatus("connecting");
+    logLine("System", "Connecting to " + wsUrl + " ...");
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+        clearTimeout(retryTimer);
+        retryDelay = 1000;
+        logLine("System", "Handshake complete. WebSocket ready.");
+        setStatus("online");
+        if (joined) {
+            // Connection came back: tell everyone we're still here.
+            resetPeers();
+            requestUsers();
+            rescanAvatars();
+            sendPacket("HELLO", myId, myName, "re");
+            if (!connToast.hidden) {
+                showConnToast("back", "Reconnected");
+                toastTimer = setTimeout(hideConnToast, TOAST_BACK_MS);
+            }
+        } else if (!resuming) {
+            resumeSession();
+        }
+    };
+
+    socket.onmessage = (event) => {
+        let data = String(event.data);
+
+        // The original lab server wraps every message as "User <n> says: <text>".
+        // Unwrap it so the chat still works if that server is running.
+        const wrapped = /^User \d+ says: ([\s\S]*)$/.exec(data);
+        if (wrapped) data = wrapped[1];
+
+        const m = parse(data);
+        // Profile packets are only ever sent by the server to one tab. A copy that came wrapped as
+        // "User <n> says: ..." was relayed from another client, so it is a fake and is ignored.
+        if (wrapped && /^(PROF|PF|ACCT|NAMECHG)/.test(m.type)) return;
+        if (handleServerReply(m)) return;
+        if (QUIET_TYPES.indexOf(m.type) < 0) {
+            if (m.type === "MSG") {
+                const msg = splitMsg(m.payload);
+                logLine("Server", m.name + " says in #" + msg.ch + ": " + msg.text);
+            } else if (m.type === "IMGH") {
+                const hd = splitPayload(m.payload);
+                logLine("Server", m.name + " sent a picture in #" + hd.ch + " (" + Math.round(hd.text.split("|")[3] / 1024) + " KB)");
+            } else {
+                logLine("Server", data);
+            }
+        }
+
+        // The server announces an edit or delete to everybody. A copy that came wrapped as
+        // "User <n> says: ..." was relayed from a client, so it is a fake and is ignored.
+        if (m.type === "EDITED" || m.type === "DELETED") {
+            if (!wrapped) applyRemote(m);
+            return;
+        }
+        if (m.type === "PROFCHG") {
+            if (!wrapped && joined) onProfileChanged(m.name);
+            return;
+        }
+        // NAMECHG||oldName|newName: somebody (maybe you, on another tab) changed their username
+        if (m.type === "NAMECHG") {
+            if (!wrapped && joined) onNameChanged(m.name, m.payload);
+            return;
+        }
+
+        if (PACKET_TYPES.indexOf(m.type) < 0) {
+            if (!warnedUnknown) {
+                warnedUnknown = true;
+                logLine("System", "Ignored a message that isn't a BISCORD packet. If the chat stays empty, make sure the server is running the new app.bzg.");
+            }
+            return;
+        }
+        handle(data);
+    };
+
+    socket.onclose = () => {
+        if (leaving) return;
+        if (claim) { clearTimeout(claim.timer); claim = null; }
+        if (!joined) { clearTimeout(authTimer); resuming = false; }   // ask again once we reconnect
+        if (historyDone) finishHistory();
+        cancelTyping();
+        clearAllTypers();
+        setStatus("offline");
+        logLine("System", "Connection closed. Retrying in " + (retryDelay / 1000) + "s ...");
+        if (joined) showConnToast("lost", "Connection lost. Trying to reconnect...");
+        retryTimer = setTimeout(connect, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 10000);
+    };
+
+    socket.onerror = () => logLine("System", "Connection error.");
+}
+
+// ---------- protocol ----------
+function handle(data) {
+    const m = parse(data);
+
+    // Username checks work before we have joined.
+    // (a claim carries its own one-off id, so a second tab of the same login can't hide behind it)
+    if (m.type === "CLAIM") {
+        if (claim && m.id === claim.id) return;     // our own claim, echoed back
+        const owner = joined && same(m.name, myName);
+        // If two people claim the same name at once, the lower id wins.
+        const tie = claim && same(m.name, claim.name) && claim.id < m.id;
+        if (owner || tie) sendPacket("TAKEN", m.id, m.name, "");
+        return;
+    }
+    if (m.type === "TAKEN") {
+        if (claim && m.id === claim.id && same(m.name, claim.name)) failClaim();
+        return;
+    }
+
+    if (!joined) return;
+
+    if (m.type === "HELLO") {
+        addPeer(m.id, m.name);
+        if (m.payload !== "re" && m.id !== myId) showJoinToast(m.name);
+        if (m.id !== myId) sendPacket("HERE", myId, myName, "");
+    } else if (m.type === "HERE") {
+        addPeer(m.id, m.name);
+    } else if (m.type === "TYPING") {
+        if (m.id !== myId) {
+            const t = splitPayload(m.payload);
+            setTyper(m.id, m.name, t.ch, t.text === "1");
+        }
+    } else if (m.type === "BYE") {
+        clearTyper(m.id);
+        if (peers.delete(m.id)) {
+            renderUsers();
+            if (m.id !== myId) showLeaveToast(m.name);
+        }
+    } else if (m.type === "MSG") {
+        const msg = splitMsg(m.payload);
+        clearTyper(m.id);
+        addPeer(m.id, m.name);
+        receiveMessage(msg.ch, m.id, m.name, msg.text, msg.mid, msg.reply);
+    } else if (m.type === "IMGH") {
+        onImageHeader(m);
+    } else if (m.type === "IMGC") {
+        onImageChunk(m);
+    }
+}
+
+function resetPeers() {
+    clearAllTypers();
+    peers.clear();
+    peers.set(myId, { name: myName, seen: Date.now() });
+    renderUsers();
+}
+
+function addPeer(id, name) {
+    const known = peers.get(id);
+    peers.set(id, { name, seen: Date.now() });
+    if (!known || known.name !== name) renderUsers();
+    // Someone we have no account for yet (they just signed up): refresh the account list, once per name.
+    const key = name.toLowerCase();
+    if (usersLoaded && !registered.has(key) && !askedAbout.has(key)) {
+        askedAbout.add(key);
+        requestUsers();
+    }
+}
+
+// ---------- typing indicator (per channel) ----------
+// What we send: TYPING|id|name|channel|1 while typing, channel|0 when we stop.
+function stopTyping() {
+    clearTimeout(typingIdleTimer);
+    if (iAmTyping) {
+        iAmTyping = false;
+        sendPacket("TYPING", myId, myName, typingChannel + "|0");
+    }
+}
+
+// Used after sending a message or losing the connection: others hide our dots
+// on their own, so no extra packet is needed.
+function cancelTyping() {
+    clearTimeout(typingIdleTimer);
+    iAmTyping = false;
+}
+
+msgInput.addEventListener("input", () => {
+    if (!joined) return;
+    if (iAmTyping && typingChannel !== current) stopTyping();
+    if (msgInput.value.trim() === "") { stopTyping(); return; }
+    const now = Date.now();
+    if (!iAmTyping || now - typingSentAt > TYPING_REFRESH_MS) {
+        typingChannel = current;
+        sendPacket("TYPING", myId, myName, current + "|1");
+        typingSentAt = now;
+        iAmTyping = true;
+    }
+    clearTimeout(typingIdleTimer);
+    typingIdleTimer = setTimeout(stopTyping, TYPING_IDLE_MS);
+});
+
+// What we receive
+function setTyper(id, name, ch, on) {
+    const existed = typers.get(id);
+    if (existed) clearTimeout(existed.timer);
+    if (!on) {
+        if (existed) { typers.delete(id); renderTyping(); }
+        return;
+    }
+    typers.set(id, { name, ch, timer: setTimeout(() => clearTyper(id), TYPING_TTL_MS) });
+    if (!existed || existed.name !== name || existed.ch !== ch) renderTyping();
+}
+
+function clearTyper(id) {
+    const t = typers.get(id);
+    if (!t) return;
+    clearTimeout(t.timer);
+    typers.delete(id);
+    renderTyping();
+}
+
+function clearAllTypers() {
+    typers.forEach((t) => clearTimeout(t.timer));
+    typers.clear();
+    renderTyping();
+}
+
+function typingLabel(names) {
+    if (names.length === 1) return names[0] + " is typing";
+    if (names.length === 2) return names[0] + " and " + names[1] + " are typing";
+    if (names.length === 3) return names[0] + ", " + names[1] + " and " + names[2] + " are typing";
+    return "Several people are typing";
+}
+
+// Only people typing in the channel you are looking at are shown.
+function renderTyping() {
+    const names = Array.from(typers.values()).filter((t) => t.ch === current).map((t) => t.name);
+    if (names.length === 0) {
+        typingEl.hidden = true;
+        return;
+    }
+    const stick = nearBottom();
+    typingText.textContent = typingLabel(names);
+    typingEl.hidden = false;
+    if (stick) logEl.scrollTop = logEl.scrollHeight;
+}
+
+// Leaves this page for the login page. `text` is shown there once.
+function leaveToLogin(text) {
+    leaving = true;
+    clearTimeout(authTimer);
+    clearSession();
+    if (text) setFlash(text);
+    pageGo("/", { replace: true });
+}
+
+// The server confirmed who we are. Make sure nobody is already online under this name.
+function startClaim(name) {
+    claim = { id: newId(), name, timer: setTimeout(finishClaim, CLAIM_MS) };
+    sendPacket("CLAIM", claim.id, name, "");
+}
+
+function failClaim() {
+    clearTimeout(claim.timer);
+    claim = null;
+    leaveToLogin("That account is already online in another tab or device.");
+}
+
+// Ask the server whether the login this tab holds is still good (answered with AUTHOK or AUTHERR).
+function resumeSession() {
+    resuming = true;
+    clearTimeout(authTimer);
+    authTimer = setTimeout(() => leaveToLogin("The server didn't answer. Is app.bzg running?"), AUTH_WAIT_MS);
+    sendPacket("RESUME", myId, "", "");
+}
+
+async function finishClaim() {
+    if (!claim) return;
+    myName = claim.name;
+    // Bring back the saved chat first, so it is already on screen when the chat opens.
+    await loadHistory();
+    if (!claim) return;
+    claim = null;
+    joined = true;
+    logLine("System", "Username accepted. Joined as " + myName + ".");
+    $("meName").textContent = myName;
+    decorateAvatar($("meAvatar"), myName);
+    resetPeers();
+    showScreen("chat");
+    setStatus(state);
+    renderChannel();
+    requestUsers();
+    sendPacket("HELLO", myId, myName, "");
+    msgInput.focus();
+}
+
+// Say "still here" now and then, and forget people who went quiet.
+setInterval(() => {
+    if (!joined) return;
+    sendPacket("HERE", myId, myName, "");
+    const now = Date.now();
+    peers.forEach((p, id) => {
+        if (id !== myId && now - p.seen > STALE_MS) {
+            peers.delete(id);
+            showLeaveToast(p.name);
+        }
+    });
+    renderUsers();
+}, HEARTBEAT_MS);
+
+// Best effort goodbye when the tab closes.
+window.addEventListener("pagehide", () => {
+    if (joined) sendPacket("BYE", myId, myName, "");
+});
+
+// ---------- UI helpers ----------
+function showScreen(name) {
+    joinScreen.classList.toggle("active", name === "join");
+    chatScreen.classList.toggle("active", name === "chat");
+    placeConsole();
+}
+
+function colorFor(name) {
+    let sum = 0;
+    for (let c = 0; c < name.length; c++) sum += name.charCodeAt(c);
+    return AVATAR_COLORS[sum % AVATAR_COLORS.length];
+}
+
+function makeAvatar(name) {
+    const a = document.createElement("div");
+    a.className = "avatar";
+    decorateAvatar(a, name);
+    return a;
+}
+
+// Fills a round .avatar: the first letter on the user's colour, or their profile picture once we have it.
+// Pictures are fetched lazily, once per user, the first time an avatar for them is drawn (see the profile
+// section further down: wantAvatarPhoto / paintAvatarPhoto / refreshAvatars).
+function decorateAvatar(el, name) {
+    el.dataset.name = name.toLowerCase();
+    el.style.backgroundColor = colorFor(name);
+    el.textContent = name.charAt(0).toUpperCase();
+    paintAvatarPhoto(el, profiles.get(name.toLowerCase()));
+    wantAvatarPhoto(name);
+}
+
+function nearBottom() {
+    return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120;
+}
+
+// ---------- channels ----------
+function buildChannelList() {
+    CHANNELS.forEach((c) => {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "channel";
+        btn.dataset.ch = c.id;
+        const hash = document.createElement("span");
+        hash.className = "hash";
+        hash.textContent = "#";
+        const name = document.createElement("span");
+        name.className = "cname";
+        name.textContent = c.id;
+        const dot = document.createElement("span");
+        dot.className = "udot";
+        dot.hidden = true;
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.hidden = true;
+        btn.append(hash, name, dot, badge);
+        btn.addEventListener("click", () => switchChannel(c.id));
+        li.append(btn);
+        channelList.append(li);
+    });
+}
+
+function updateBadges() {
+    channelList.querySelectorAll(".channel").forEach((btn) => {
+        const ch = btn.dataset.ch;
+        const box = store[ch];
+        const active = ch === current;
+        btn.classList.toggle("active", active);
+        btn.classList.toggle("unread", !active && box.unread > 0);
+        btn.querySelector(".udot").hidden = active || box.unread === 0 || box.mentions > 0;
+        const badge = btn.querySelector(".badge");
+        badge.hidden = active || box.mentions === 0;
+        badge.textContent = box.mentions;
+        if (active) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+        let label = "#" + ch;
+        if (!active && box.unread) label += ", " + box.unread + " unread";
+        if (!active && box.mentions) label += ", " + box.mentions + " mentions";
+        btn.setAttribute("aria-label", label);
+    });
+}
+
+function channelInfo(id) {
+    return CHANNELS.find((c) => c.id === id);
+}
+
+function renderChannelHeader() {
+    const info = channelInfo(current);
+    chanNameEl.textContent = current;
+    chanTopicEl.textContent = info.topic;
+    msgInput.placeholder = "Message #" + current;
+    welcomeTitle.textContent = "Welcome to #" + current;
+    welcomeText.textContent = "This is the start of the #" + current + " channel. " + info.topic + ".";
+}
+
+function renderChannel() {
+    logEl.classList.remove("chan-in");   // a plain redraw (delete, trim) must not replay the switch animation
+    unloadAllPics();   // the old channel's pictures leave the screen: free them
+    const items = store[current].items;
+    const nodes = [];
+    items.forEach((item, i) => buildNodes(item, items[i - 1]).forEach((n) => nodes.push(n)));
+    logEl.replaceChildren(welcomeEl, ...nodes, typingEl);
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function switchChannel(ch) {
+    if (ch === current) { closeDrawers(); return; }
+    stopTyping();                       // we were typing in the old channel
+    drafts[current] = msgInput.value;   // keep what was typed, per channel
+    cancelReply();                      // a reply belongs to the channel it was started in
+    const dir = CHANNELS.findIndex((c) => c.id === ch) > CHANNELS.findIndex((c) => c.id === current) ? 1 : -1;
+    current = ch;
+    msgInput.value = drafts[ch] || "";
+    autoGrow(msgInput);
+    closeMentions();
+    store[ch].unread = 0;
+    store[ch].mentions = 0;
+    updateBadges();
+    renderChannelHeader();
+    renderChannel();
+    playChannelSwitch(dir);
+    renderTyping();
+    closeDrawers();
+    if (!msgInput.disabled) msgInput.focus();
+}
+
+// ---------- channel switch animation ----------
+// The header swaps with a pop and a colour sweep, and the newest messages fly in one after another.
+// dir = 1 when the new channel is further down the list (content rises up), -1 when it is further up (content drops in).
+// The look itself lives in style.css under "CHANNEL SWITCH ANIMATION".
+const chanBarEl = document.querySelector(".chanbar");
+const CHAN_STAGGER_MAX = 10;   // only the newest messages are animated one by one (older ones are off screen)
+const CHAN_FX_MS = 1200;       // a little longer than the slowest animation
+let chanFxTimer = null;
+
+function playChannelSwitch(dir) {
+    // header
+    chanBarEl.style.setProperty("--dir", dir);
+    chanBarEl.classList.remove("chan-swap");
+    void chanBarEl.offsetWidth;                  // flush styles so the animation starts over
+    chanBarEl.classList.add("chan-swap");
+
+    // messages
+    const rows = Array.from(logEl.children).filter((el) => el !== typingEl);
+    rows.forEach((el) => { el.style.removeProperty("--i"); el.removeAttribute("data-still"); });
+    const first = Math.max(0, rows.length - CHAN_STAGGER_MAX);
+    rows.forEach((el, i) => {
+        if (i < first) el.setAttribute("data-still", "");     // scrolled out of view: no animation
+        else el.style.setProperty("--i", i - first);
+    });
+    logEl.style.setProperty("--dir", dir);
+    logEl.classList.remove("chan-in");
+    void logEl.offsetWidth;
+    logEl.classList.add("chan-in");
+    clearTimeout(chanFxTimer);
+    chanFxTimer = setTimeout(() => logEl.classList.remove("chan-in"), CHAN_FX_MS);
+}
+
+// ---------- messages ----------
+const dayKey = (ts) => {
+    const d = new Date(ts);
+    return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+};
+
+function dayLabel(ts) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (dayKey(ts) === dayKey(Date.now())) return "Today";
+    if (dayKey(ts) === dayKey(yesterday.getTime())) return "Yesterday";
+    return new Date(ts).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+}
+
+const timeLabel = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function mentionsMe(text) {
+    const safe = myName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp("(^|[^\\w])@" + safe + "(?![\\w])", "i").test(text);
+}
+
+// Writes text into an element, turning @names of people who are online into tags.
+function appendText(el, text) {
+    // Online people plus everyone with an account, so an @name keeps its tag after a save
+    // even when that person happens to be offline or the roster hasn't refreshed.
+    const known = new Map();
+    registered.forEach((n, key) => known.set(key, n));
+    peers.forEach((p) => known.set(p.name.toLowerCase(), p.name));
+    const names = Array.from(known.values()).sort((a, b) => b.length - a.length);
+    let buf = "";
+    let i = 0;
+    while (i < text.length) {
+        if (text[i] === "@" && (i === 0 || !/\w/.test(text[i - 1]))) {
+            const hit = names.find((n) =>
+                text.substr(i + 1, n.length).toLowerCase() === n.toLowerCase() &&
+                !/\w/.test(text.charAt(i + 1 + n.length)));
+            if (hit) {
+                if (buf) { el.append(buf); buf = ""; }
+                const tag = document.createElement("span");
+                tag.className = "mention-tag" + (same(hit, myName) ? " me" : "");
+                tag.textContent = text.substr(i, hit.length + 1);
+                el.append(tag);
+                i += hit.length + 1;
+                continue;
+            }
+        }
+        buf += text[i];
+        i++;
+    }
+    if (buf) el.append(buf);
+}
+
+function makeDivider(ts) {
+    const d = document.createElement("div");
+    d.className = "divider";
+    const label = document.createElement("span");
+    label.textContent = dayLabel(ts);
+    d.append(label);
+    return d;
+}
+
+function makeSystem(item) {
+    const s = document.createElement("div");
+    s.className = "sys";
+    s.textContent = item.text;
+    return s;
+}
+
+function makeMessage(item, grouped) {
+    const mine = item.id === myId;
+    const row = document.createElement("div");
+    row.className = "msg " + (grouped ? "cont" : "head") + (mine ? " mine" : "") + (item.mention ? " mention" : "");
+
+    const gutter = document.createElement("div");
+    gutter.className = "gutter";
+    const content = document.createElement("div");
+    content.className = "content";
+
+    if (grouped) {
+        const t = document.createElement("time");
+        t.textContent = timeLabel(item.ts);
+        gutter.append(t);
+    } else {
+        gutter.append(makeAvatar(item.name));
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const who = document.createElement("b");
+        who.textContent = item.name;
+        const time = document.createElement("time");
+        time.textContent = timeLabel(item.ts);
+        meta.append(who, time);
+        content.append(meta);
+    }
+
+    let bubble;
+    if (item.kind === "img") {
+        bubble = makeImageBubble(item);
+    } else {
+        bubble = document.createElement("div");
+        bubble.className = "bubble";
+        fillBubble(bubble, item);
+    }
+
+    if (item.mid) row.dataset.mid = item.mid;
+    if (item.mid) {
+        // Every message gets a Reply button. Only your own messages also get Edit / Delete.
+        // The buttons are only a convenience; the server checks again who wrote the message.
+        if (item.kind === "img" && item.status === "sending") row.classList.add("busy");
+        const wrap = document.createElement("div");
+        wrap.className = "bwrap";
+        if (item.replyTo) wrap.append(makeReplyRef(item));
+        wrap.append(bubble, makeActions(item));
+        content.append(wrap);
+    } else {
+        if (item.replyTo) content.append(makeReplyRef(item));
+        content.append(bubble);
+    }
+
+    row.append(gutter, content);
+    syncEditedNote(row, item);
+    return row;
+}
+
+// The text of a message bubble (with a small "(edited)" note after an edit).
+function fillBubble(bubble, item) {
+    bubble.replaceChildren();
+    appendText(bubble, item.text);
+}
+
+// The small "(edited)" note sits under the bubble, not inside it.
+function syncEditedNote(row, item) {
+    const content = row && row.querySelector(".content");
+    if (!content) return;
+    let note = content.querySelector(".edited-note");
+    if (item.edited && item.kind === "msg") {
+        if (!note) {
+            note = document.createElement("small");
+            note.className = "edited-note";
+            note.textContent = "(edited)";
+            content.append(note);
+        }
+    } else if (note) {
+        note.remove();
+    }
+}
+
+// One item can become several nodes: an optional date divider, then the item.
+function buildNodes(item, prev) {
+    const nodes = [];
+    const newDay = !prev || dayKey(prev.ts) !== dayKey(item.ts);
+    if (newDay) nodes.push(makeDivider(item.ts));
+    if (item.kind === "sys") {
+        nodes.push(makeSystem(item));
+        return nodes;
+    }
+    const grouped = !newDay && prev.kind !== "sys" && prev.id === item.id && item.ts - prev.ts < GROUP_MS;
+    nodes.push(makeMessage(item, grouped));
+    return nodes;
+}
+
+function addItem(ch, item) {
+    const box = store[ch];
+    const prev = box.items[box.items.length - 1];
+    box.items.push(item);
+    if (box.items.length > 500) {
+        box.items.splice(0, 100).forEach(forgetItem);
+        if (ch === current) renderChannel();
+        return;
+    }
+    if (ch !== current) return;
+    const stick = item.id === myId || nearBottom();
+    buildNodes(item, prev).forEach((n) => logEl.insertBefore(n, typingEl)); // typing bubble stays last
+    if (stick) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function addSystem(text, ch) {
+    addItem(ch || "general", { kind: "sys", text, ts: Date.now() });
+}
+
+function receiveMessage(ch, id, name, text, mid, replyTo) {
+    const mine = id === myId;
+    const mention = !mine && mentionsMe(text);
+    addItem(ch, { kind: "msg", id, name, text, ts: Date.now(), mention, mid: mid || "", edited: false, replyTo: replyTo || "" });
+    if (!mine) noteUnread(ch, mention);
+}
+
+function noteUnread(ch, mention) {
+    if (ch === current) return;
+    store[ch].unread++;
+    if (mention) store[ch].mentions++;
+    updateBadges();
+}
+
+// ---------- replying to messages ----------
+// The Reply button (hover a message, or look under it on a phone) puts a "Replying to ..." bar above the message box.
+// Send, and the new message carries a small quote of the original. On the wire the reply goes in the message-id slot:
+//   MSG|id|name|channel|messageId~replyToId|text     SAVE|id|channel|ts|messageId~replyToId|text
+// The server saves it (messages.reply_to) only if the original exists in the same channel, and sends it back with
+// the history. The quote is built from the original message we hold, so if the original was deleted (or is older than
+// the history we loaded) it says so instead.
+const replyBar = $("replyBar"), replyWho = $("replyWho"), replyText = $("replyText");
+let replyingTo = null;       // the item being answered, or null
+
+const REPLY_SNIPPET = 90;
+function snippetOf(item) {
+    if (!item) return "";
+    if (item.kind === "img") return "Photo";
+    const t = (item.text || "").replace(/\s+/g, " ").trim();
+    return t.length > REPLY_SNIPPET ? t.slice(0, REPLY_SNIPPET) + "\u2026" : t;
+}
+
+function findItem(ch, mid) {
+    if (!MID_RE.test(mid) || !store[ch]) return null;
+    return store[ch].items.find((it) => it.mid === mid && it.kind !== "sys") || null;
+}
+
+function startReply(item) {
+    if (!joined || !item || !item.mid) return;
+    replyingTo = item;
+    replyWho.textContent = same(item.name, myName) ? "yourself" : item.name;
+    replyText.textContent = snippetOf(item);
+    replyBar.hidden = false;
+    msgInput.focus();
+}
+
+function cancelReply() {
+    replyingTo = null;
+    replyBar.hidden = true;
+}
+
+$("replyCancel").addEventListener("click", () => { cancelReply(); msgInput.focus(); });
+
+// The quote shown above a reply. Clicking it scrolls to the original message.
+function makeReplyRef(item) {
+    const ch = item.ch || current;
+    const orig = findItem(ch, item.replyTo);
+    const ref = document.createElement("button");
+    ref.type = "button";
+    ref.className = "reply-ref" + (orig ? "" : " gone");
+    ref.dataset.ref = item.replyTo;
+    const who = document.createElement("b");
+    const text = document.createElement("span");
+    text.className = "reply-text";
+    if (orig) {
+        who.textContent = same(orig.name, myName) ? "You" : orig.name;
+        text.textContent = snippetOf(orig);
+        ref.title = "Jump to the original message";
+        ref.addEventListener("click", () => jumpToMessage(item.replyTo));
+    } else {
+        who.textContent = "Reply";
+        text.textContent = "The original message was deleted or is too old to show.";
+        ref.disabled = true;
+    }
+    ref.append(who, text);
+    return ref;
+}
+
+function jumpToMessage(mid) {
+    const row = findRow(mid);
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.remove("flash");
+    void row.offsetWidth;               // restart the animation if it is already playing
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 1600);
+}
+
+// ---------- edit and delete your own messages ----------
+// Only the author gets the buttons, and the server only accepts EDIT / DELETE from the author
+// (it checks the secret from login and who wrote the message), so this is more than cosmetics.
+//   EDIT|id|name|secret|messageId|newText      DELETE|id|name|secret|messageId
+// The server answers everybody with  EDITED||user|channel|messageId|text  or  DELETED||user|channel|messageId
+// and answers a refusal to the sender only (EDITERR / DELETEERR with the reason).
+const PENCIL_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const TRASH_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>';
+
+const REPLY_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v4"/></svg>';
+
+function actionButton(label, html, extraClass, onClick) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "act-btn" + (extraClass ? " " + extraClass : "");
+    b.title = label;
+    b.setAttribute("aria-label", label);
+    b.innerHTML = html;
+    b.addEventListener("click", onClick);
+    return b;
+}
+
+function makeActions(item) {
+    const bar = document.createElement("div");
+    bar.className = "msg-actions";
+
+    function show(confirming) {
+        bar.classList.toggle("confirming", confirming);
+        bar.replaceChildren();
+        if (confirming) {
+            const q = document.createElement("span");
+            q.className = "act-ask";
+            q.textContent = item.kind === "img" ? "Delete picture?" : "Delete message?";
+            const yes = actionButton("Yes, delete", "Delete", "text danger", () => sendDelete(item));
+            const no = actionButton("Keep it", "Keep", "text", () => show(false));
+            bar.append(q, yes, no);
+            no.focus();
+        } else {
+            bar.append(actionButton("Reply", REPLY_SVG, "", () => startReply(item)));
+            if (!same(item.name, myName)) return;       // Edit and Delete are for your own messages only
+            if (item.kind === "msg") bar.append(actionButton("Edit message", PENCIL_SVG, "", () => startEdit(item, bar)));
+            bar.append(actionButton(item.kind === "img" ? "Delete picture" : "Delete message", TRASH_SVG, "danger", () => show(true)));
+        }
+    }
+    show(false);
+    return bar;
+}
+
+function findRow(mid) {
+    return MID_RE.test(mid) ? logEl.querySelector('.msg[data-mid="' + mid + '"]') : null;
+}
+
+// Swaps the message bubble for a small box with the text, Save and Cancel.
+function startEdit(item, bar) {
+    const wrap = bar.parentElement;
+    const bubble = wrap.querySelector(".bubble");
+    if (!bubble || wrap.querySelector(".edit-form")) return;
+
+    const form = document.createElement("form");
+    form.className = "edit-form";
+    const input = document.createElement("textarea");
+    input.className = "field edit-input";
+    input.rows = 1;
+    input.maxLength = 1000;
+    input.value = item.text;
+    input.setAttribute("aria-label", "Edit your message");
+    const save = document.createElement("button");
+    save.type = "submit";
+    save.className = "btn small blue";
+    save.textContent = "Save";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn small";
+    cancel.textContent = "Cancel";
+    const hint = document.createElement("small");
+    hint.className = "edit-hint";
+    hint.textContent = "Enter to save, Ctrl+Enter for a new line, Esc to cancel";
+    form.append(input, save, cancel, hint);
+
+    const close = () => { form.remove(); bubble.hidden = false; bar.hidden = false; };
+    cancel.addEventListener("click", close);
+    input.addEventListener("input", () => autoGrow(input));
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.preventDefault(); close(); }
+        else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) { e.preventDefault(); insertNewline(input); }
+        else if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+    });
+    form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const text = input.value.trim();
+        if (!text || text === item.text) { close(); return; }      // nothing changed (an empty message isn't allowed)
+        if (sendEdit(item, text)) close();                          // the new text shows up when the server confirms
+    });
+
+    bubble.hidden = true;
+    bar.hidden = true;
+    wrap.append(form);
+    autoGrow(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function sendEdit(item, text) {
+    if (!sendPacket("EDIT", myId, myName, mySecret + "|" + item.mid + "|" + text)) {
+        addSystem("Couldn't edit your message: not connected.", current);
+        return false;
+    }
+    return true;
+}
+
+function sendDelete(item) {
+    if (!sendPacket("DELETE", myId, myName, mySecret + "|" + item.mid)) {
+        addSystem("Couldn't delete your message: not connected.", current);
+    }
+}
+
+// The server tells everybody (this tab included) that a message was edited or deleted.
+function applyRemote(m) {
+    if (!joined) return;
+    const a = splitPayload(m.payload);               // channel | rest
+    if (m.type === "EDITED") {
+        const k = a.text.indexOf("|");
+        if (k > 0) applyEdited(a.ch, a.text.slice(0, k), m.name, a.text.slice(k + 1));
+    } else {
+        applyDeleted(a.ch, a.text, m.name);
+    }
+}
+
+// Finds a message we hold by its id. It must also be written by `name`: a notice about
+// somebody else's message is ignored.
+function findOwned(ch, mid, name) {
+    if (!MID_RE.test(mid) || !store[ch]) return -1;
+    const at = store[ch].items.findIndex((it) => it.mid === mid && it.kind !== "sys");
+    if (at < 0 || !same(store[ch].items[at].name, name)) return -1;
+    return at;
+}
+
+function applyEdited(ch, mid, name, text) {
+    const at = findOwned(ch, mid, name);
+    if (at < 0) return;
+    const item = store[ch].items[at];
+    if (item.kind !== "msg") return;
+    item.text = text;
+    item.edited = true;
+    // An edit can add or remove an @mention of me, so the highlight has to follow the new text.
+    if (item.id !== myId) {
+        const now = mentionsMe(text);
+        if (now && !item.mention && ch !== current) { store[ch].mentions++; updateBadges(); }
+        item.mention = now;
+    }
+    const row = ch === current ? findRow(mid) : null;
+    if (row) row.classList.toggle("mention", !!item.mention);
+    const bubble = row && row.querySelector(".bubble");
+    if (bubble) fillBubble(bubble, item);
+    syncEditedNote(row, item);
+    // replies that quote this message, and the bar above the message box
+    if (ch === current) {
+        logEl.querySelectorAll('.reply-ref[data-ref="' + mid + '"] .reply-text').forEach((el) => { el.textContent = snippetOf(item); });
+    }
+    if (replyingTo === item) replyText.textContent = snippetOf(item);
+}
+
+function applyDeleted(ch, mid, name) {
+    const at = findOwned(ch, mid, name);
+    if (at < 0) return;
+    const gone = store[ch].items.splice(at, 1)[0];
+    forgetItem(gone);
+    if (replyingTo === gone) cancelReply();
+    if (ch !== current) return;
+    const stick = nearBottom();
+    const top = logEl.scrollTop;
+    renderChannel();                                  // closes the gap and fixes the grouping and date dividers
+    if (!stick) logEl.scrollTop = top;
+}
+
+// ---------- pictures ----------
+// A picture travels as one header packet and many small data packets:
+//   IMGH|id|name|channel|picId|packets|mime|bytes|width|height
+//   IMGC|id|name|picId|index|base64data
+const images = new Map();    // picId -> item (every picture we know about)
+const incoming = new Map();  // picId -> { item, parts, got, total, timer }  (still arriving)
+const liveUrls = new Map();  // picId -> object URL of a picture currently on screen
+let storedBytes = 0;
+let hiddenTimer = null;
+
+const picObserver = window.IntersectionObserver
+    ? new IntersectionObserver((entries) => {
+        entries.forEach((e) => { if (e.isIntersecting) showPic(e.target); else hidePic(e.target); });
+    }, { root: logEl, rootMargin: "250px 0px" })
+    : null;
+
+const newPicId = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+
+function fitSize(w, h) {
+    const scale = Math.min(1, 360 / w, 380 / h);
+    return Math.round(w * scale);
+}
+
+function makeImageBubble(item) {
+    const bubble = document.createElement("div");
+    bubble.className = "bubble pic-bubble";
+
+    const fig = document.createElement("figure");
+    fig.className = "pic";
+    fig.dataset.img = item.imgId;
+    fig.style.width = fitSize(item.w, item.h) + "px";
+    fig.style.aspectRatio = item.w + " / " + item.h;
+
+    const img = document.createElement("img");
+    img.alt = "Picture from " + item.name;
+    img.decoding = "async";
+    img.draggable = false;
+
+    // The animated placeholder shown while a picture arrives or (re)loads.
+    const load = document.createElement("div");
+    load.className = "pic-load";
+    const chip = document.createElement("span");
+    chip.className = "pic-chip";
+    const dots = document.createElement("span");
+    dots.className = "pic-dots";
+    dots.innerHTML = "<i></i><i></i><i></i>";
+    const label = document.createElement("span");
+    label.className = "pic-label";
+    chip.append(dots, label);
+    const bar = document.createElement("span");
+    bar.className = "pic-bar";
+    bar.innerHTML = "<b></b>";
+    load.append(chip, bar);
+
+    fig.append(img, load);
+    fig.addEventListener("click", () => { if (fig.dataset.state === "ready") openLightbox(item); });
+    bubble.append(fig);
+
+    applyPicState(fig, item);
+    return bubble;
+}
+
+function setPicState(fig, state, text) {
+    fig.dataset.state = state;
+    fig.querySelector(".pic-label").textContent = text;
+}
+
+// Make a picture's box match its item (called when it is built and whenever the item changes).
+function applyPicState(fig, item) {
+    const pct = Math.round(item.progress * 100);
+    if (item.status === "receiving" || item.status === "sending") {
+        setPicState(fig, "transfer", (item.status === "sending" ? "Sending " : "Receiving ") + pct + "%");
+        fig.querySelector(".pic-bar b").style.width = pct + "%";
+    } else if (item.status === "saved") {
+        dropSrc(fig);
+        setPicState(fig, "unloaded", "Loading...");
+        requestLoad(fig);
+    } else if (item.status === "failed") {
+        dropSrc(fig);
+        setPicState(fig, "failed", item.failText || "Picture didn't arrive");
+    } else if (item.status === "expired") {
+        dropSrc(fig);
+        setPicState(fig, "expired", "Removed to save memory");
+    } else if (item.status === "ready") {
+        if (!fig.querySelector("img").getAttribute("src")) setPicState(fig, "unloaded", "Loading...");
+        requestLoad(fig);
+    }
+}
+
+function updatePicUI(item) {
+    const fig = logEl.querySelector('[data-img="' + item.imgId + '"]');
+    if (fig) applyPicState(fig, item);
+}
+
+// Ask for a picture to be loaded if it is on screen. The observer answers
+// straight away, then again whenever the picture scrolls in or out.
+function requestLoad(fig) {
+    if (picObserver) {
+        picObserver.unobserve(fig);
+        picObserver.observe(fig);
+    } else {
+        showPic(fig);
+    }
+}
+
+function releaseUrl(picId) {
+    const url = liveUrls.get(picId);
+    if (url) { URL.revokeObjectURL(url); liveUrls.delete(picId); }
+}
+
+function dropSrc(fig) {
+    const img = fig.querySelector("img");
+    if (img.getAttribute("src")) {
+        img.onload = null;
+        img.onerror = null;
+        img.removeAttribute("src");
+    }
+    releaseUrl(fig.dataset.img);
+}
+
+// On screen (or about to be): put the picture in memory and show it.
+function showPic(fig) {
+    const item = images.get(fig.dataset.img);
+    if (item && item.status === "saved") { fetchSaved(item); return; }
+    if (!item || item.status !== "ready" || !item.blob) return;
+    const img = fig.querySelector("img");
+    if (img.getAttribute("src")) return;   // already loaded or loading
+
+    const url = URL.createObjectURL(item.blob);
+    liveUrls.set(item.imgId, url);
+    setPicState(fig, "loading", "Loading...");
+    const started = Date.now();
+    img.onload = () => {
+        const wait = Math.max(0, MIN_LOADING_MS - (Date.now() - started));
+        setTimeout(() => {
+            if (img.getAttribute("src") === url) setPicState(fig, "ready", "");
+        }, wait);
+    };
+    img.onerror = () => setPicState(fig, "failed", "Couldn't show this picture");
+    img.src = url;
+}
+
+// Off screen: let go of the decoded picture. It reloads when you scroll back to it.
+function hidePic(fig) {
+    const img = fig.querySelector("img");
+    if (!img.getAttribute("src")) return;
+    dropSrc(fig);
+    setPicState(fig, "unloaded", "Loading...");
+}
+
+function unloadAllPics() {
+    if (picObserver) picObserver.disconnect();
+    liveUrls.forEach((url) => URL.revokeObjectURL(url));
+    liveUrls.clear();
+}
+
+// Forget the oldest pictures if memory use grows too large.
+function trimPictures() {
+    if (storedBytes <= MAX_STORE_BYTES) return;
+    const old = Array.from(images.values()).filter((it) => it.blob).sort((a, b) => a.ts - b.ts);
+    for (const it of old) {
+        if (storedBytes <= MAX_STORE_BYTES) break;
+        storedBytes -= it.blob.size;
+        it.blob = null;
+        it.status = it.saved ? "saved" : "expired";
+        releaseUrl(it.imgId);
+        updatePicUI(it);
+    }
+}
+
+// A message scrolled out of the 500-message history.
+function forgetItem(item) {
+    if (!item.imgId) return;
+    const tr = incoming.get(item.imgId);
+    if (tr) { clearTimeout(tr.timer); incoming.delete(item.imgId); }
+    if (item.blob) storedBytes -= item.blob.size;
+    images.delete(item.imgId);
+    releaseUrl(item.imgId);
+}
+
+// Free every picture while the tab is hidden; bring the visible ones back afterwards.
+document.addEventListener("visibilitychange", () => {
+    clearTimeout(hiddenTimer);
+    if (document.hidden) {
+        hiddenTimer = setTimeout(() => logEl.querySelectorAll(".pic").forEach(hidePic), HIDDEN_UNLOAD_MS);
+    } else {
+        logEl.querySelectorAll(".pic").forEach(requestLoad);
+    }
+});
+
+// ----- receiving -----
+function onImageHeader(m) {
+    if (m.id === myId) return;                       // our own picture comes back to us: ignore
+    const hd = splitPayload(m.payload);
+    const f = hd.text.split("|");                    // picId, packets, mime, bytes, width, height
+    const picId = f[0], total = +f[1], mime = f[2], size = +f[3], w = +f[4], h = +f[5];
+    const sane = picId && images.has(picId) === false &&
+        total >= 1 && total <= 2000 && size > 0 && size <= MAX_RECV_BYTES &&
+        IMAGE_TYPES.indexOf(mime) >= 0 && w >= 1 && h >= 1 && w <= 8192 && h <= 8192;
+    if (!sane) return;
+
+    const item = {
+        kind: "img", id: m.id, name: m.name, ts: Date.now(), imgId: picId, mime, size, w, h,
+        mid: picId, status: "receiving", progress: 0, blob: null
+    };
+    images.set(picId, item);
+    incoming.set(picId, {
+        item, parts: new Array(total), got: 0, total,
+        timer: setTimeout(() => failPicture(picId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS)
+    });
+    clearTyper(m.id);
+    addPeer(m.id, m.name);
+    addItem(hd.ch, item);
+    noteUnread(hd.ch, false);
+}
+
+function onImageChunk(m) {
+    if (m.id === myId) return;
+    acceptChunk(m.payload);
+}
+
+// payload is  picId|index|base64data  (live from another person, or PICC from the server)
+function acceptChunk(payload) {
+    const k1 = payload.indexOf("|");
+    const k2 = payload.indexOf("|", k1 + 1);
+    if (k1 < 1 || k2 < 0) return;
+    const tr = incoming.get(payload.slice(0, k1));
+    if (!tr) return;                                 // we joined mid-transfer: skip it
+    const index = +payload.slice(k1 + 1, k2);
+    if (!(index >= 0 && index < tr.total) || tr.parts[index] !== undefined) return;
+
+    tr.parts[index] = payload.slice(k2 + 1);
+    tr.got++;
+    tr.item.progress = tr.got / tr.total;
+    clearTimeout(tr.timer);
+    tr.timer = setTimeout(() => failPicture(tr.item.imgId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS);
+
+    if (tr.got < tr.total) {
+        updatePicUI(tr.item);
+    } else {
+        clearTimeout(tr.timer);
+        incoming.delete(tr.item.imgId);
+        try {
+            const blob = base64ToBlob(tr.parts.join(""), tr.item.mime);
+            if (blob.size !== tr.item.size) throw new Error("size mismatch");
+            completePicture(tr.item, blob);
+        } catch (err) {
+            failPicture(tr.item.imgId, "Picture arrived damaged");
+        }
+    }
+}
+
+function completePicture(item, blob) {
+    item.blob = blob;
+    item.progress = 1;
+    item.status = "ready";
+    storedBytes += blob.size;
+    updatePicUI(item);
+    trimPictures();
+}
+
+function failPicture(picId, text) {
+    const tr = incoming.get(picId);
+    if (tr) { clearTimeout(tr.timer); incoming.delete(picId); }
+    const item = images.get(picId);
+    if (!item) return;
+    item.status = "failed";
+    item.failText = text;
+    updatePicUI(item);
+}
+
+function base64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+}
+
+const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(new Error("Couldn't read that picture."));
+    r.readAsDataURL(blob);
+});
+
+// ----- sending -----
+async function decodeImage(file) {
+    if (window.createImageBitmap) {
+        try { return await createImageBitmap(file); } catch (err) { /* fall back to <img> */ }
+    }
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that picture.")); };
+        img.src = url;
+    });
+}
+
+// Shrink and compress so a picture is a few dozen packets, not thousands.
+async function prepareImage(file) {
+    if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
+    const src = await decodeImage(file);
+    const sw = src.naturalWidth || src.width;
+    const sh = src.naturalHeight || src.height;
+    if (!sw || !sh) throw new Error("Couldn't read that picture.");
+
+    // Small GIFs are sent as they are, so they keep moving.
+    if (file.type === "image/gif" && file.size <= MAX_IMG_BYTES) {
+        return { blob: file, w: sw, h: sh, mime: "image/gif" };
+    }
+
+    let scale = Math.min(1, MAX_DIM / Math.max(sw, sh));
+    let quality = 0.82;
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const w = Math.max(1, Math.round(sw * scale));
+        const h = Math.max(1, Math.round(sh * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(src, 0, 0, w, h);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+        if (!blob) throw new Error("Couldn't process that picture.");
+        if (blob.size <= MAX_IMG_BYTES) return { blob, w, h, mime: "image/jpeg" };
+        if (quality > 0.5) quality -= 0.12; else scale *= 0.8;
+    }
+    throw new Error("That picture is too detailed to send. Try a smaller one.");
+}
+
+const sendQueue = [];
+let sendingNow = false;
+
+function queueImage(file) {
+    if (!joined || state !== "online") { addSystem("Connect first, then send your picture.", current); return; }
+    sendQueue.push({ file, ch: current });
+    if (!sendingNow) runSendQueue();
+}
+
+async function runSendQueue() {
+    sendingNow = true;
+    while (sendQueue.length) {
+        const job = sendQueue.shift();
+        try {
+            await sendImage(job.file, job.ch);
+        } catch (err) {
+            addSystem("Couldn't send that picture: " + err.message, job.ch);
+        }
+    }
+    sendingNow = false;
+}
+
+async function sendImage(file, ch) {
+    const pic = await prepareImage(file);
+    const data = await blobToBase64(pic.blob);
+    const parts = [];
+    for (let i = 0; i < data.length; i += CHUNK_CHARS) parts.push(data.slice(i, i + CHUNK_CHARS));
+
+    const picId = newPicId();
+    const item = {
+        kind: "img", id: myId, name: myName, ts: Date.now(), imgId: picId, mime: pic.mime,
+        mid: picId, size: pic.blob.size, w: pic.w, h: pic.h, status: "sending", progress: 0, blob: pic.blob
+    };
+    images.set(picId, item);
+    storedBytes += pic.blob.size;
+    addItem(ch, item);
+
+    try {
+        const header = [ch, picId, parts.length, pic.mime, pic.blob.size, pic.w, pic.h, item.ts].join("|");
+        if (!sendPacket("IMGH", myId, myName, header)) throw new Error("Not connected.");
+        for (let i = 0; i < parts.length; i++) {
+            while (socket && socket.bufferedAmount > 256 * 1024) await sleep(20);
+            if (!sendPacket("IMGC", myId, myName, picId + "|" + i + "|" + parts[i])) throw new Error("Connection lost while sending.");
+            item.progress = (i + 1) / parts.length;
+            if (i % 3 === 2) { updatePicUI(item); await sleep(CHUNK_PACKET_DELAY_MS); }
+        }
+    } catch (err) {
+        item.status = "failed";
+        item.failText = "Couldn't send";
+        updatePicUI(item);
+        throw err;
+    }
+    item.progress = 1;
+    item.status = "ready";
+    updatePicUI(item);
+    const sentRow = findRow(item.mid);
+    if (sentRow) sentRow.classList.remove("busy");   // sent: its Delete button can show now
+    trimPictures();
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ----- viewing -----
+let lbUrl = null;
+function openLightbox(item) {
+    if (!item.blob) return;
+    closeLightbox();
+    lbUrl = URL.createObjectURL(item.blob);
+    lbImg.src = lbUrl;
+    lightbox.hidden = false;
+}
+function closeLightbox() {
+    if (lightbox.hidden) return;
+    lightbox.hidden = true;
+    lbImg.removeAttribute("src");
+    if (lbUrl) { URL.revokeObjectURL(lbUrl); lbUrl = null; }
+}
+lightbox.addEventListener("click", closeLightbox);
+
+// ----- ways to pick a picture -----
+attachBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+    Array.from(fileInput.files).forEach(queueImage);
+    fileInput.value = "";
+});
+
+msgInput.addEventListener("paste", (e) => {
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter((f) => /^image\//.test(f.type));
+    if (files.length) {
+        e.preventDefault();
+        files.forEach(queueImage);
+    }
+});
+
+let dragDepth = 0;
+const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).indexOf("Files") >= 0;
+const mainEl = chatScreen.querySelector(".main");
+mainEl.addEventListener("dragenter", (e) => { if (hasFiles(e)) { e.preventDefault(); dragDepth++; dropHint.hidden = false; } });
+mainEl.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+mainEl.addEventListener("dragleave", (e) => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; dropHint.hidden = true; } });
+mainEl.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    dropHint.hidden = true;
+    Array.from(e.dataTransfer.files).filter((f) => /^image\//.test(f.type)).forEach(queueImage);
+});
+
+// ---------- members ----------
+function insertMention(name) {
+    const v = msgInput.value;
+    msgInput.value = v + (v && !/\s$/.test(v) ? " " : "") + "@" + name + " ";
+    msgInput.focus();
+    autoGrow(msgInput);
+    msgInput.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// Ask the server for every registered account (answered with USER ..., USEREND).
+function requestUsers() {
+    if (usersBuf) { usersAgain = true; return; }     // one request at a time
+    usersBuf = [];
+    clearTimeout(usersTimer);
+    usersTimer = setTimeout(finishUsers, HISTORY_WAIT_MS);
+    if (!sendPacket("USERS", myId, myName, "")) { usersBuf = null; clearTimeout(usersTimer); }
+}
+
+function finishUsers() {
+    clearTimeout(usersTimer);
+    if (usersBuf) {
+        registered.clear();
+        usersBuf.forEach((n) => registered.set(n.toLowerCase(), n));
+        usersLoaded = true;
+    }
+    usersBuf = null;
+    renderUsers();
+    if (usersAgain) { usersAgain = false; requestUsers(); }
+}
+
+// Everyone with an account. People who are online right now (green) come first, then the rest (grey).
+function renderUsers() {
+    const rows = new Map();   // lower-case name -> { name, id }   (id = the tab that is online, or null)
+    registered.forEach((name, key) => rows.set(key, { name, id: null }));
+    peers.forEach((p, id) => {
+        const key = p.name.toLowerCase();
+        const row = rows.get(key);
+        if (row) { row.id = id; row.name = p.name; } else rows.set(key, { name: p.name, id });
+    });
+    const list = Array.from(rows.values()).sort((a, b) =>
+        (a.id === null) - (b.id === null) || a.name.localeCompare(b.name));
+    countEl.textContent = list.filter((r) => r.id !== null).length;
+    totalEl.textContent = list.length;
+    usersEl.replaceChildren();
+    list.forEach((r) => {
+        const active = r.id !== null;
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "member " + (active ? "active" : "inactive");
+        btn.setAttribute("aria-label", r.name + (active ? ", online" : ", offline"));
+        const label = document.createElement("span");
+        label.textContent = r.name;
+        btn.append(makeAvatar(r.name), label);
+        if (same(r.name, myName)) {
+            const tag = document.createElement("span");
+            tag.className = "you";
+            tag.textContent = "you";
+            btn.append(tag);
+            btn.title = "View your profile";
+        } else {
+            btn.title = "View " + r.name + "'s profile" + (active ? "" : " (offline)");
+        }
+        btn.setAttribute("aria-haspopup", "dialog");
+        btn.dataset.name = r.name;
+        btn.addEventListener("click", () => { hideThought(); closeDrawers(); openProfile(r.name); });
+        btn.addEventListener("pointerenter", (e) => { if (e.pointerType !== "touch") showThought(btn); });
+        btn.addEventListener("pointerleave", () => hideThought(btn));
+        btn.addEventListener("focus", () => { if (btn.matches(":focus-visible")) showThought(btn); });
+        btn.addEventListener("blur", () => hideThought(btn));
+        li.append(btn);
+        usersEl.appendChild(li);
+    });
+    restoreThought();
+}
+
+// ---------- drawers (small screens) ----------
+function closeDrawers() {
+    channelsEl.classList.remove("open");
+    panel.classList.remove("open");
+    scrim.classList.remove("show");
+    chanBtn.setAttribute("aria-expanded", "false");
+    whoBtn.setAttribute("aria-expanded", "false");
+}
+
+function toggleDrawer(el, btn) {
+    const open = !el.classList.contains("open");
+    closeDrawers();
+    if (open) {
+        el.classList.add("open");
+        scrim.classList.add("show");
+        btn.setAttribute("aria-expanded", "true");
+    }
+}
+
+chanBtn.addEventListener("click", () => toggleDrawer(channelsEl, chanBtn));
+whoBtn.addEventListener("click", () => toggleDrawer(panel, whoBtn));
+scrim.addEventListener("click", closeDrawers);
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { closeDrawers(); closeLightbox(); closeProfile(); }
+    // Alt + Up/Down jumps between channels
+    if (joined && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        const i = CHANNELS.findIndex((c) => c.id === current);
+        const next = CHANNELS[(i + (e.key === "ArrowDown" ? 1 : CHANNELS.length - 1)) % CHANNELS.length];
+        switchChannel(next.id);
+    }
+});
+
+// ---------- events ----------
+// Messages the server sends to this tab only (not part of the live chat).
+// Returns true when it handled the packet.
+function handleServerReply(m) {
+    if (m.id !== myId) return false;
+    if (m.type === "AUTHOK") {
+        clearTimeout(authTimer);
+        resuming = false;
+        if (!claim && !joined) startClaim(m.name);
+        return true;
+    }
+    if (m.type === "AUTHERR") {
+        leaveToLogin(m.name);
+        return true;
+    }
+    if (m.type === "HIST") {
+        // name = who wrote it, payload = channel|timestamp|messageId|edited|text
+        const a = splitPayload(m.payload);
+        // (messageId is  id~replyToId  when the message is a reply)
+        const f = takeFields(a.text, 3);               // timestamp, messageId, edited, text
+        if (historyBuf && historyBuf[a.ch] && a.text.indexOf("|") >= 0) {
+            const idm = MID_REPLY_RE.exec(f[1]);
+            historyBuf[a.ch].push({ user: m.name, ts: Number(f[0]) || Date.now(), mid: idm ? idm[1] : f[1], reply: idm && idm[2] ? idm[2] : "", edited: f[2] === "1", text: f[3] });
+        }
+        return true;
+    }
+    if (m.type === "HISTEND") {
+        finishHistory();
+        return true;
+    }
+    if (m.type === "USER") {
+        // name = a registered username
+        if (usersBuf && m.name) usersBuf.push(m.name);
+        return true;
+    }
+    if (m.type === "USEREND") {
+        finishUsers();
+        return true;
+    }
+    if (m.type === "PICH") {
+        // name = picId, payload = packets|mime|bytes   (a saved picture is on its way)
+        const f = m.payload.split("|");
+        const item = images.get(m.name);
+        const total = +f[0];
+        if (item && total >= 1 && total <= 2000) {
+            const old = incoming.get(m.name);
+            if (old) clearTimeout(old.timer);
+            incoming.set(m.name, {
+                item, parts: new Array(total), got: 0, total,
+                timer: setTimeout(() => failPicture(m.name, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS)
+            });
+        }
+        return true;
+    }
+    if (m.type === "PICC") {
+        acceptChunk(m.name + "|" + m.payload);       // name = picId, payload = index|data
+        return true;
+    }
+    if (m.type === "PICERR") {
+        failPicture(m.name, "Picture is no longer saved");
+        return true;
+    }
+    if (m.type === "PROF") { onProfile(m); return true; }
+    if (m.type === "PROFNONE") { onProfileMissing(m.name); return true; }
+    if (m.type === "PROFOK") { onProfileSaved(); return true; }
+    if (m.type === "PROFERR") { onProfileError(m.name); return true; }
+    if (m.type === "PFIH") { onProfileImageHeader(m); return true; }
+    if (m.type === "PFIC") { onProfileImageChunk(m); return true; }
+    if (m.type === "PFIERR") { onProfileImageMissing({ name: m.name, payload: m.payload }); return true; }
+    if (m.type === "ACCTOK") { onAcctOk(m); return true; }
+    if (m.type === "ACCTERR") { onAcctError(m.name); return true; }
+    if (m.type === "EDITERR" || m.type === "DELETEERR") {
+        // name = the reason
+        const what = m.type === "EDITERR" ? "edit" : "delete";
+        logLine("System", "Couldn't " + what + " the message: " + m.name);
+        addSystem("Couldn't " + what + " that message: " + m.name, current);
+        return true;
+    }
+    if (m.type === "SAVEERR") {
+        logLine("System", "Message not saved: " + m.name);
+        addSystem("Your login expired, so new messages aren't being saved. Log out and back in.", current);
+        return true;
+    }
+    return false;
+}
+
+// Log out: tell everyone we left, tell the server to forget this login, go back to the login page.
+$("logoutBtn").addEventListener("click", () => {
+    leaving = true;
+    if (joined) sendPacket("BYE", myId, myName, "");
+    sendPacket("LOGOUT", myId, myName, "");
+    joined = false;
+    clearSession();
+    pageGo("/");
+});
+
+// ---------- saved chat ----------
+// Past messages come from the server (app.bzg) as HIST packets, ending with HISTEND.
+// Items get the id "h:<name>" so grouping works; messages from you count as yours.
+function loadHistory() {
+    return new Promise((resolve) => {
+        historyBuf = {};
+        CHANNELS.forEach((c) => { historyBuf[c.id] = []; });
+        historyDone = resolve;
+        clearTimeout(historyTimer);
+        historyTimer = setTimeout(() => {
+            logLine("System", "Couldn't load saved chat: the server didn't answer.");
+            finishHistory();
+        }, HISTORY_WAIT_MS);
+        if (!sendPacket("HISTORY", myId, myName, "")) finishHistory();
+    });
+}
+
+function finishHistory() {
+    clearTimeout(historyTimer);
+    if (historyBuf) {
+        logLine("System", "Saved chat received: " + CHANNELS.map((c) => "#" + c.id + " " + (historyBuf[c.id] || []).length).join(", "));
+        CHANNELS.forEach((c) => {
+            store[c.id].items = (historyBuf[c.id] || []).map((m) => {
+                const who = same(m.user, myName) ? myId : "h:" + m.user.toLowerCase();
+                return savedPicture(m, who) || {
+                    kind: "msg", id: who, name: m.user, text: m.text, ts: m.ts, mention: false,
+                    mid: m.mid, edited: !!m.edited, replyTo: m.reply || "", ch: c.id
+                };
+            });
+        });
+    }
+    historyBuf = null;
+    const done = historyDone;
+    historyDone = null;
+    if (done) done();
+}
+
+// A saved picture is stored in the chat log as  [img]picId,mime,bytes,width,height
+// Build a picture item that fetches its data from the server when it scrolls into view.
+function savedPicture(m, who) {
+    if (m.text.slice(0, 5) !== "[img]") return null;
+    const f = m.text.slice(5).split(",");
+    const picId = f[0], mime = f[1], size = +f[2], w = +f[3], h = +f[4];
+    if (!picId || IMAGE_TYPES.indexOf(mime) < 0 || !(size > 0) || !(w >= 1) || !(h >= 1)) return null;
+    const item = {
+        kind: "img", id: who, name: m.user, ts: m.ts, imgId: picId, mime, size, w, h,
+        mid: m.mid || picId, status: "saved", saved: true, progress: 0, blob: null
+    };
+    images.set(picId, item);
+    return item;
+}
+
+// Ask the server for a saved picture (answered with PICH, PICC ..., see handleServerReply).
+function fetchSaved(item) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    item.status = "receiving";
+    item.progress = 0;
+    updatePicUI(item);
+    sendPacket("IMGGET", myId, myName, item.imgId);
+    // if the server never answers, show the usual "didn't arrive" state
+    const tr = {
+        item, parts: [], got: 0, total: 0,
+        timer: setTimeout(() => failPicture(item.imgId, "Picture didn't arrive"), TRANSFER_TIMEOUT_MS)
+    };
+    incoming.set(item.imgId, tr);
+}
+
+// Tell the server to keep this message (it also reaches everyone live through MSG).
+function saveMessage(ch, text, mid) {
+    sendPacket("SAVE", myId, ch, Date.now() + "|" + mid + "|" + text);
+}
+
+$("chatForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    closeMentions();
+    const text = msgInput.value.trim();
+    if (!text || !joined) return;
+    let mid = newMsgId();
+    // a reply travels as  messageId~replyToId  (only if the original is still here)
+    if (replyingTo && findItem(current, replyingTo.mid)) mid += "~" + replyingTo.mid;
+    if (sendPacket("MSG", myId, myName, current + "|" + mid + "|" + text)) {
+        saveMessage(current, text, mid);
+        cancelReply();
+        msgInput.value = "";
+        autoGrow(msgInput);
+        drafts[current] = "";
+        cancelTyping();
+    }
+    msgInput.focus();
+});
+
+// ---------- @mention suggestions ----------
+// Typing "@" in the message box opens a list of everybody with an account (online first, then offline).
+// Keep typing and the list narrows to the names that match: names that START with what you typed come
+// first, then names that contain it. Up / Down move, Enter or Tab insert the name, Esc closes the list.
+const mentionList = $("mentionList");
+const MENTION_MAX = 50;
+let mentionMatches = [];     // [{ name, online }]
+let mentionIndex = 0;
+let mentionQueryText = null; // what was typed after the "@" the last time the list was drawn
+
+// The "@word" the caret is at the end of: { start (position of the @), text } or null.
+function mentionQuery() {
+    if (msgInput.selectionStart !== msgInput.selectionEnd) return null;
+    const caret = msgInput.selectionStart;
+    const m = /(^|\s)@([^\s@]*)$/.exec(msgInput.value.slice(0, caret));
+    return m ? { start: caret - m[2].length - 1, text: m[2] } : null;
+}
+
+function mentionCandidates(text) {
+    const all = new Map();   // lower-case name -> { name, online }
+    registered.forEach((n, key) => all.set(key, { name: n, online: false }));
+    peers.forEach((p) => all.set(p.name.toLowerCase(), { name: p.name, online: true }));
+    all.delete(myName.toLowerCase());                  // no point mentioning yourself
+    const needle = text.toLowerCase();
+    const starts = [], inside = [];
+    all.forEach((u, key) => {
+        const at = key.indexOf(needle);
+        if (at === 0) starts.push(u); else if (at > 0) inside.push(u);
+    });
+    const order = (a, b) => (b.online - a.online) || a.name.localeCompare(b.name);
+    return starts.sort(order).concat(inside.sort(order)).slice(0, MENTION_MAX);
+}
+
+function closeMentions() {
+    mentionList.hidden = true;
+    mentionList.replaceChildren();
+    mentionMatches = [];
+    mentionQueryText = null;
+    msgInput.setAttribute("aria-expanded", "false");
+    msgInput.removeAttribute("aria-activedescendant");
+}
+
+function paintMentionSelection() {
+    Array.from(mentionList.children).forEach((li, i) => {
+        const on = i === mentionIndex;
+        li.setAttribute("aria-selected", String(on));
+        if (on) {
+            msgInput.setAttribute("aria-activedescendant", li.id);
+            li.scrollIntoView({ block: "nearest" });
+        }
+    });
+}
+
+// Name with the part you typed highlighted.
+function mentionLabel(name, text) {
+    const nm = mk("span", "nm");
+    const at = text ? name.toLowerCase().indexOf(text.toLowerCase()) : -1;
+    if (at < 0) { nm.textContent = name; return nm; }
+    nm.append(name.slice(0, at), mk("b", "", name.slice(at, at + text.length)), name.slice(at + text.length));
+    return nm;
+}
+
+function updateMentions() {
+    const q = mentionQuery();
+    if (!q || msgInput.disabled) { closeMentions(); return; }
+    if (q.text !== mentionQueryText) mentionIndex = 0;    // a new search starts at the top
+    mentionQueryText = q.text;
+    mentionMatches = mentionCandidates(q.text);
+    if (mentionIndex >= mentionMatches.length) mentionIndex = 0;
+
+    mentionList.replaceChildren();
+    if (!mentionMatches.length) {
+        const li = mk("li", "mention-empty", q.text ? "Nobody matches @" + q.text : "Nobody to mention yet");
+        li.setAttribute("role", "presentation");
+        mentionList.append(li);
+    }
+    mentionMatches.forEach((u, i) => {
+        const li = mk("li", "mention-item " + (u.online ? "online" : "offline"));
+        li.id = "mention-" + i;
+        li.setAttribute("role", "option");
+        li.append(makeAvatar(u.name), mentionLabel(u.name, q.text));
+        const st = mk("span", "st");
+        st.append(mk("i"), document.createTextNode(u.online ? "online" : "offline"));
+        li.append(st);
+        // mousedown (not click) so the message box keeps focus and its caret
+        li.addEventListener("mousedown", (e) => { e.preventDefault(); pickMention(i); });
+        li.addEventListener("mousemove", () => { if (mentionIndex !== i) { mentionIndex = i; paintMentionSelection(); } });
+        mentionList.append(li);
+    });
+    mentionList.hidden = false;
+    msgInput.setAttribute("aria-expanded", "true");
+    paintMentionSelection();
+}
+
+function pickMention(i) {
+    const u = mentionMatches[i];
+    const q = mentionQuery();
+    if (!u || !q) { closeMentions(); return; }
+    const caret = msgInput.selectionStart;
+    const insert = "@" + u.name + " ";
+    const v = msgInput.value;
+    msgInput.value = v.slice(0, q.start) + insert + v.slice(caret);
+    const pos = q.start + insert.length;
+    msgInput.setSelectionRange(pos, pos);
+    closeMentions();
+    msgInput.focus();
+    msgInput.dispatchEvent(new Event("input", { bubbles: true }));   // keeps the "is typing" signal going
+}
+
+msgInput.addEventListener("input", updateMentions);
+msgInput.addEventListener("click", updateMentions);
+msgInput.addEventListener("blur", closeMentions);
+msgInput.addEventListener("keyup", (e) => {
+    // moving the caret with the arrow keys can enter or leave an "@word"
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].indexOf(e.key) >= 0) updateMentions();
+});
+msgInput.addEventListener("keydown", (e) => {
+    // Ctrl+Enter (or Cmd+Enter) = new line. Browsers don't add one themselves, so we do.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault();
+        insertNewline(msgInput);
+        return;
+    }
+    // A <textarea> doesn't submit its form on Enter, so plain Enter sends (Shift+Enter still adds a line).
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && mentionList.hidden) {
+        e.preventDefault();
+        $("chatForm").requestSubmit();
+        return;
+    }
+    if (e.key === "Escape" && mentionList.hidden && replyingTo) {
+        e.preventDefault();
+        cancelReply();
+        return;
+    }
+    if (mentionList.hidden) return;
+    const n = mentionMatches.length;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeMentions();
+    } else if (n && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        mentionIndex = (mentionIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        paintMentionSelection();
+    } else if (n && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();                 // Enter picks the name instead of sending the message
+        pickMention(mentionIndex);
+    }
+});
+
+// ---------- profiles ----------
+// A profile card shows a person's picture, backdrop, thought bubble, bio and links.
+// It opens from your own user card (bottom left) or from a member in the right-hand panel.
+// Packets (see app.bzg; all answers go to this tab only):
+//   PROFGET|id||username              -> PROF|id|username|since|avatarVer|backdropVer|color|thought|links|bio
+//   PFGET|id||username|kind           -> PFIH + PFIC ... (a picture, kind = avatar or backdrop) or PFIERR
+//   PROFF|id||secret|field|value      change one of YOUR fields (thought, bio, links, color)
+//   PROFDONE|id||secret               all fields sent -> PROFOK, and everybody gets PROFCHG||username
+//   PFUH / PFUC / PFUDEL              upload / remove YOUR picture or backdrop
+// Text fields travel URL-encoded so they can never contain the "|" separator.
+const PROF = { thought: 80, bio: 240, linkLabel: 20, linkUrl: 120, links: 3 };
+const PROF_ENC_MAX = { thought: 300, bio: 900, links: 1400 };     // same limits as the server
+const AVATAR_PX = 160;
+const BACKDROP_W = 600, BACKDROP_H = 200;
+const AVATAR_MAX_BYTES = 40 * 1024, BACKDROP_MAX_BYTES = 70 * 1024;
+const PROF_WAIT_MS = 5000;
+
+const profileModal = $("profileModal"), profileCard = $("profileCard");
+const profiles = new Map();   // lower-case name -> profile (see blankProfile)
+const profileImgBuf = new Map(); // "name|kind" -> picture pieces still arriving
+let profOpen = "";            // lower-case name of the card on screen ("" = closed)
+let profEditing = false;
+let profDraft = null;
+let profTimer = null;
+let profOpener = null;        // what had focus before the card opened
+let profAck = null;           // { resolve, reject } while a save waits for the server
+
+// ----- card animation state (see "PROFILE CARD ANIMATIONS" in style.css) -----
+const PROF_REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)");
+const PROF_OUT_MS = 440;          // how long the closing animation runs before the card is hidden
+const PROF_SWAP_MS = 330;         // old content leaves, then the new content is drawn
+let profClosing = false;
+let profSwapping = false;
+let profCloseTimer = null, profSwapTimer = null, profIntroTimer = null;
+let profIntroAt = 0, profIntroBase = 0, profIntroStep = 45;
+
+// Every piece of the card that flies in/out one after the other.
+const PROF_STG = [
+    ".prof-banner", ".prof-avatar-wrap", ".prof-thought", ".prof-top > .field",
+    ".prof-body > .prof-name", ".prof-body > .prof-status", ".prof-body > .prof-sec",
+    ".prof-body > .prof-head", ".prof-body > textarea.field", ".prof-body > .lbl",
+    ".prof-body > .prof-link-row", ".prof-body > .prof-note", ".prof-body > .prof-error:not([hidden])",
+    ".prof-links li", ".prof-actions .prof-btn"
+].join(", ");
+
+// Numbers the pieces (--i) and gives each its start delay (--d). While an entrance is still running, a redraw
+// (for example "Loading…" turning into the real profile) continues the same timeline instead of restarting it.
+function profNumber() {
+    const parts = profileCard.querySelectorAll(PROF_STG);
+    const elapsed = profileCard.classList.contains("is-in") ? performance.now() - profIntroAt : 0;
+    parts.forEach((el, i) => {
+        el.classList.add("stg");
+        el.style.setProperty("--i", i);
+        el.style.setProperty("--d", Math.round(profIntroBase + i * profIntroStep - elapsed) + "ms");
+    });
+    profileCard.style.setProperty("--n", parts.length);
+}
+
+// kind: "open" (card appears) or "swap" (view <-> edit). dir: 0 for open, 1 = content comes from the right, -1 = from the left.
+function profIntro(kind, dir) {
+    profileCard.dataset.intro = kind;
+    profileCard.style.setProperty("--dx", dir);
+    profileCard.style.setProperty("--dy", kind === "open" ? 24 : 10);
+    profIntroAt = performance.now();
+    profIntroBase = kind === "open" ? 220 : 30;
+    profIntroStep = kind === "open" ? 45 : 32;
+    profileCard.classList.add("is-in");
+    clearTimeout(profIntroTimer);
+    profIntroTimer = setTimeout(() => profileCard.classList.remove("is-in"), 2200);
+}
+
+function resetCardFx() {
+    clearTimeout(profSwapTimer);
+    clearTimeout(profIntroTimer);
+    profSwapping = false;
+    profileCard.classList.remove("is-in", "is-swap-out", "is-resizing");
+    profileCard.style.height = "";
+    profileCard.style.transition = "";
+}
+
+// Switches between the view and the edit card with an animation: the old content slides away, the card
+// glides to its new height, and the new content flies in. change() flips the state; after() runs once it is drawn.
+// Returns false (and does nothing) if another switch is still running.
+function swapProfile(change, dir, after) {
+    if (profSwapping) return false;
+    if (profileModal.hidden || profClosing || PROF_REDUCED.matches) {
+        change();
+        renderProfile();
+        if (after) after();
+        return true;
+    }
+    profSwapping = true;
+    const h0 = profileCard.offsetHeight;
+    profileCard.style.height = h0 + "px";
+    profileCard.classList.remove("is-in");
+    profileCard.style.setProperty("--dx", dir);
+    profileCard.classList.add("is-resizing", "is-swap-out");
+    profSwapTimer = setTimeout(() => {
+        profileCard.classList.remove("is-swap-out");
+        profileCard.style.transition = "none";
+        profileCard.style.height = "auto";
+        change();
+        profIntro("swap", dir);
+        renderProfile();
+        const h1 = profileCard.offsetHeight;          // the height the new content needs
+        profileCard.style.height = h0 + "px";
+        void profileCard.offsetHeight;                // commit the old height, then glide to the new one
+        profileCard.style.transition = "";
+        profileCard.style.height = h1 + "px";
+        // a little wobble as the card settles. Done with the Web Animations API on purpose: switching the card's CSS
+        // animation (and back) would make its opening animation play again.
+        profileCard.animate([
+            { transform: "scale(1)" },
+            { transform: "scale(1.02, .985)", offset: .3 },
+            { transform: "scale(.992, 1.008)", offset: .55 },
+            { transform: "scale(1)" }
+        ], { duration: 600, easing: "ease-out" });
+        if (after) after();
+        profSwapTimer = setTimeout(() => {
+            profileCard.classList.remove("is-resizing");
+            profileCard.style.height = "";
+            profSwapping = false;
+        }, 650);
+    }, PROF_SWAP_MS);
+    return true;
+}
+
+function blankProfile(name) {
+    return {
+        name, loaded: false, failed: false, since: 0, color: "", thought: "", bio: "", links: [],
+        avatarVer: 0, backdropVer: 0, avatarUrl: "", backdropUrl: "", avatarShown: -1, backdropShown: -1
+    };
+}
+
+function mk(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+}
+
+const safeDecode = (s) => { try { return decodeURIComponent(s); } catch (err) { return ""; } };
+const hexOk = (c) => /^[0-9a-fA-F]{6}$/.test(c);
+const accentOf = (p) => (hexOk(p.color) ? "#" + p.color : colorFor(p.name));
+
+// Links are stored as JSON. Anything that isn't a plain http(s) address is dropped.
+function parseLinks(json) {
+    let list = [];
+    try { list = JSON.parse(json); } catch (err) { return []; }
+    if (!Array.isArray(list)) return [];
+    return list.slice(0, PROF.links).map((x) => ({
+        l: String((x && x.l) || "").slice(0, PROF.linkLabel),
+        u: String((x && x.u) || "").slice(0, PROF.linkUrl)
+    })).filter((x) => /^https?:\/\/[^\s]+$/i.test(x.u));
+}
+
+function normalizeUrl(u) {
+    u = u.trim();
+    if (!u) return "";
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = "https://" + u;
+    return u;
+}
+
+function hostOf(u) {
+    try { return new URL(u).hostname.replace(/^www\./, ""); } catch (err) { return u; }
+}
+
+// ----- profile pictures on the small round avatars (messages, member list, your user card, mentions, popups) -----
+const avatarAsked = new Set();    // lower-case names we already asked the server about
+
+function paintAvatarPhoto(el, p) {
+    const url = p && p.avatarUrl;
+    if (url) {
+        el.style.backgroundImage = 'url("' + url + '")';
+        el.style.backgroundSize = "cover";
+        el.style.backgroundPosition = "center";
+        el.textContent = "";
+        el.classList.add("has-photo");
+    } else if (el.classList.contains("has-photo")) {
+        el.style.backgroundImage = "";
+        el.textContent = (el.dataset.name || "?").charAt(0).toUpperCase();
+        el.classList.remove("has-photo");
+    }
+}
+
+// Every avatar on the page that belongs to this user gets repainted (new picture, picture removed, ...).
+function refreshAvatars(key) {
+    const p = profiles.get(key);
+    document.querySelectorAll(".avatar[data-name]").forEach((el) => {
+        if (el.dataset.name === key) paintAvatarPhoto(el, p);
+    });
+}
+
+// Asks the server for the user's profile once (the reply carries the picture version, then the picture follows).
+function wantAvatarPhoto(name) {
+    const key = name.toLowerCase();
+    if (!joined || avatarAsked.has(key)) return;
+    let p = profiles.get(key);
+    if (p && p.loaded) return;
+    if (!p) { p = blankProfile(name); profiles.set(key, p); }
+    if (!sendPacket("PROFGET", myId, "", name)) return;     // not connected: rescanAvatars() tries again later
+    avatarAsked.add(key);
+    setTimeout(() => {                                       // no answer: allow another try
+        const q = profiles.get(key);
+        if (!q || !q.loaded) avatarAsked.delete(key);
+    }, PROF_WAIT_MS * 2);
+}
+
+function rescanAvatars() {
+    avatarAsked.clear();
+    document.querySelectorAll(".avatar[data-name]").forEach((el) => wantAvatarPhoto(el.dataset.name));
+}
+
+// ----- thought bubble on hover (members panel) -----
+// One floating bubble shared by every member. It lives outside the panel (the panel scrolls and would clip it),
+// sits just left of the hovered member and uses the profile's thought text. The profile is fetched the first time
+// someone hovers; the bubble pops up as soon as it arrives.
+const thoughtTip = $("thoughtTip");
+const THOUGHT_GAP = 48;          // room for the two little bubbles between the big one and the member
+let thoughtBtn = null;           // the member button being hovered (null = none)
+let thoughtFor = null;           // the member button the visible bubble is currently showing
+
+function placeThought() {
+    if (!thoughtBtn || !thoughtBtn.isConnected) return;
+    const r = thoughtBtn.getBoundingClientRect();
+    thoughtTip.style.maxWidth = Math.max(120, Math.min(260, r.left - THOUGHT_GAP - 12)) + "px";
+    const w = thoughtTip.offsetWidth, h = thoughtTip.offsetHeight;
+    const left = Math.max(8, r.left - THOUGHT_GAP - w);
+    const top = Math.min(Math.max(8, r.top + r.height / 2 - h / 2), window.innerHeight - h - 8);
+    thoughtTip.style.left = left + "px";
+    thoughtTip.style.top = top + "px";
+    // keep the two little bubbles lined up with the member even when the box was nudged to stay on screen
+    const mid = Math.min(Math.max(14, r.top + r.height / 2 - top), h - 14);
+    thoughtTip.style.setProperty("--tail-y", mid + "px");
+}
+
+function showThought(btn) {
+    thoughtBtn = btn;
+    const p = profiles.get((btn.dataset.name || "").toLowerCase());
+    if (!p || !p.loaded) { wantAvatarPhoto(btn.dataset.name || ""); }   // fetch it; paintThought() runs on arrival
+    paintThought();
+}
+
+// Restarts the pop-in from the very first frame, whatever state the bubble was in
+// (hidden, fading out, or already showing another member's thought).
+function revealThought() {
+    thoughtTip.classList.remove("show", "leaving");
+    void thoughtTip.offsetWidth;                   // flush styles so the animations start over
+    thoughtTip.classList.add("show");
+}
+
+function leaveThought() {
+    if (!thoughtTip.classList.contains("show")) return;
+    thoughtTip.classList.remove("show");
+    thoughtTip.classList.add("leaving");
+}
+
+function paintThought() {
+    if (!thoughtBtn || !thoughtBtn.isConnected) { hideThought(); return; }
+    const p = profiles.get((thoughtBtn.dataset.name || "").toLowerCase());
+    const text = p && p.loaded ? p.thought : "";
+    if (!text) {                                   // not loaded yet, or nothing to say: no bubble
+        leaveThought();
+        thoughtFor = null;
+        thoughtTip.setAttribute("aria-hidden", "true");
+        thoughtBtn.removeAttribute("aria-describedby");
+        return;
+    }
+    thoughtTip.textContent = text;
+    placeThought();
+    // pop in whenever the bubble was hidden or now belongs to a different member;
+    // a mere text update for the same member (they edited their thought) just swaps the text
+    if (thoughtFor !== thoughtBtn || !thoughtTip.classList.contains("show")) revealThought();
+    thoughtFor = thoughtBtn;
+    thoughtTip.setAttribute("aria-hidden", "false");
+    thoughtBtn.setAttribute("aria-describedby", "thoughtTip");
+}
+
+function hideThought(btn) {
+    if (btn && btn !== thoughtBtn) return;         // a stale leave event from a member we already left
+    if (thoughtBtn) thoughtBtn.removeAttribute("aria-describedby");
+    thoughtBtn = null;
+    thoughtFor = null;
+    leaveThought();
+    thoughtTip.setAttribute("aria-hidden", "true");
+}
+
+// the member list is rebuilt now and then (someone joins); keep the bubble if the pointer is still on that member
+function restoreThought() {
+    if (!thoughtBtn) return;
+    const name = (thoughtBtn.dataset.name || "").toLowerCase();
+    const next = Array.from(usersEl.querySelectorAll(".member")).find((b) => (b.dataset.name || "").toLowerCase() === name);
+    if (next && (next.matches(":hover") || next.matches(":focus-visible"))) {
+        if (thoughtFor === thoughtBtn) thoughtFor = next;      // same person: don't replay the pop
+        thoughtBtn = next;
+        paintThought();
+    } else hideThought();
+}
+
+panel.addEventListener("scroll", () => hideThought(), { passive: true });
+window.addEventListener("resize", () => hideThought());
+
+// ----- opening and closing -----
+function openProfile(name) {
+    if (profClosing) finishClose();               // reopened while the old card was still leaving
+    resetCardFx();
+    const key = name.toLowerCase();
+    profOpener = document.activeElement;
+    profOpen = key;
+    profEditing = false;
+    profDraft = null;
+    if (!profiles.has(key)) profiles.set(key, blankProfile(name));
+    const p = profiles.get(key);
+    p.failed = false;
+    profileModal.hidden = false;
+    profIntro("open", 0);
+    renderProfile();
+    refreshProfile(key);
+    const first = profileCard.querySelector("button");
+    if (first) first.focus({ preventScroll: true });
+}
+
+function refreshProfile(key) {
+    const p = profiles.get(key);
+    if (!p) return;
+    clearTimeout(profTimer);
+    profTimer = setTimeout(() => {
+        if (!p.loaded) { p.failed = true; if (profOpen === key && !profEditing) renderProfile(); }
+    }, PROF_WAIT_MS);
+    if (!sendPacket("PROFGET", myId, "", p.name)) { p.failed = true; renderProfile(); }
+}
+
+function closeProfile() {
+    if (profileModal.hidden || profClosing) return;
+    discardDraftPreviews();
+    profOpen = "";
+    profEditing = false;
+    profDraft = null;
+    clearTimeout(profTimer);
+    if (profOpener && profOpener.focus) { try { profOpener.focus({ preventScroll: true }); } catch (err) { } }
+    profOpener = null;
+    if (PROF_REDUCED.matches) { finishClose(); return; }
+    // let the card play its exit animation first; finishClose() hides it afterwards
+    resetCardFx();
+    profClosing = true;
+    profileCard.classList.add("is-out");
+    profileModal.classList.add("is-closing");
+    profCloseTimer = setTimeout(finishClose, PROF_OUT_MS);
+}
+
+function finishClose() {
+    clearTimeout(profCloseTimer);
+    profClosing = false;
+    resetCardFx();
+    profileModal.hidden = true;
+    profileModal.classList.remove("is-closing");
+    profileCard.classList.remove("is-out");
+    profileCard.replaceChildren();
+}
+
+profileModal.addEventListener("mousedown", (e) => { if (e.target === profileModal) closeProfile(); });
+
+function dropProfile(key) {
+    const p = profiles.get(key);
+    if (!p) return;
+    [p.avatarUrl, p.backdropUrl].forEach((u) => { if (u) URL.revokeObjectURL(u); });
+    profiles.delete(key);
+    avatarAsked.delete(key);
+    refreshAvatars(key);              // back to the letter until the next fetch
+    wantAvatarPhoto(p.name);
+}
+
+// ----- messages from the server -----
+function onProfile(m) {
+    // name = username, payload = since|avatarVer|backdropVer|color|thought|links|bio
+    const key = m.name.toLowerCase();
+    const p = profiles.get(key);
+    if (!p) return;
+    const f = m.payload.split("|");
+    p.name = m.name;
+    p.since = Number(f[0]) || 0;
+    p.avatarVer = Number(f[1]) || 0;
+    p.backdropVer = Number(f[2]) || 0;
+    p.color = hexOk(f[3] || "") ? f[3] : "";
+    p.thought = safeDecode(f[4] || "").slice(0, PROF.thought);
+    p.links = parseLinks(safeDecode(f[5] || ""));
+    p.bio = safeDecode(f[6] || "").slice(0, PROF.bio);
+    p.loaded = true;
+    p.failed = false;
+    clearTimeout(profTimer);
+    ["avatar", "backdrop"].forEach((kind) => {
+        const ver = p[kind + "Ver"];
+        if (ver === 0) {
+            if (p[kind + "Url"]) URL.revokeObjectURL(p[kind + "Url"]);
+            p[kind + "Url"] = "";
+            p[kind + "Shown"] = 0;
+            if (kind === "avatar") refreshAvatars(key);
+        } else if (p[kind + "Shown"] !== ver) {
+            p[kind + "Shown"] = ver;          // asked for: the picture shows up when it arrives
+            sendPacket("PFGET", myId, "", p.name + "|" + kind);
+        }
+    });
+    if (profOpen === key && !profEditing) renderProfile();
+    if (thoughtBtn && (thoughtBtn.dataset.name || "").toLowerCase() === key) paintThought();
+}
+
+function onProfileMissing(name) {
+    const p = profiles.get(name.toLowerCase());
+    if (!p) return;
+    p.failed = true;
+    clearTimeout(profTimer);
+    if (profOpen === name.toLowerCase() && !profEditing) renderProfile();
+}
+
+function onProfileChanged(name) {
+    const key = name.toLowerCase();
+    if (profOpen === key) {
+        if (!profEditing) refreshProfile(key);   // while you are editing, the save refreshes it afterwards
+    } else if (profiles.has(key)) {
+        // fetch again so their avatars update; the old picture stays until the new one arrives
+        // (sent directly: refreshProfile() would reset the open card's timer)
+        sendPacket("PROFGET", myId, "", profiles.get(key).name);
+    }
+}
+
+// PFIH: name = username, payload = kind|packets|mime
+function onProfileImageHeader(m) {
+    const f = m.payload.split("|");
+    const total = +f[1];
+    if (!profiles.has(m.name.toLowerCase()) || !(total >= 1 && total <= 99)) return;
+    const key = m.name.toLowerCase() + "|" + f[0];
+    const old = profileImgBuf.get(key);
+    if (old) clearTimeout(old.timer);
+    profileImgBuf.set(key, {
+        parts: new Array(total), got: 0, total, mime: f[2],
+        timer: setTimeout(() => profileImgBuf.delete(key), TRANSFER_TIMEOUT_MS)
+    });
+}
+
+// PFIC: name = username, payload = kind|index|data
+function onProfileImageChunk(m) {
+    const k1 = m.payload.indexOf("|");
+    const k2 = m.payload.indexOf("|", k1 + 1);
+    if (k1 < 0 || k2 < 0) return;
+    const kind = m.payload.slice(0, k1);
+    const index = +m.payload.slice(k1 + 1, k2);
+    const key = m.name.toLowerCase() + "|" + kind;
+    const buf = profileImgBuf.get(key);
+    if (!buf || !(index >= 0 && index < buf.total) || buf.parts[index] !== undefined) return;
+    buf.parts[index] = m.payload.slice(k2 + 1);
+    buf.got++;
+    if (buf.got < buf.total) return;
+    clearTimeout(buf.timer);
+    profileImgBuf.delete(key);
+    const p = profiles.get(m.name.toLowerCase());
+    if (!p || (kind !== "avatar" && kind !== "backdrop")) return;
+    try {
+        const url = URL.createObjectURL(base64ToBlob(buf.parts.join(""), IMAGE_TYPES.indexOf(buf.mime) >= 0 ? buf.mime : "image/jpeg"));
+        if (p[kind + "Url"]) URL.revokeObjectURL(p[kind + "Url"]);
+        p[kind + "Url"] = url;
+    } catch (err) { return; }
+    if (kind === "avatar") refreshAvatars(m.name.toLowerCase());
+    if (profOpen === m.name.toLowerCase() && !profEditing) renderProfile();
+}
+
+function onProfileImageMissing(m) {
+    // name = username, payload = kind: nothing to show, keep the letter / colour
+    const p = profiles.get(m.name.toLowerCase());
+    if (p && (m.payload === "avatar" || m.payload === "backdrop")) p[m.payload + "Shown"] = -1;
+}
+
+// ----- drawing the card -----
+function isOnline(name) {
+    return Array.from(peers.values()).some((x) => same(x.name, name));
+}
+
+function paintBanner(banner, p, previewUrl) {
+    const url = previewUrl !== undefined ? previewUrl : p.backdropUrl;
+    banner.style.backgroundColor = accentOf(p);
+    if (url) {
+        banner.classList.add("has-img");
+        banner.style.backgroundImage = 'url("' + url + '")';
+    } else {
+        banner.classList.remove("has-img");
+        banner.style.backgroundImage = "";
+    }
+}
+
+function paintAvatar(av, p, previewUrl) {
+    const url = previewUrl !== undefined ? previewUrl : p.avatarUrl;
+    av.style.backgroundColor = colorFor(p.name);
+    if (url) {
+        av.classList.add("has-img");
+        av.style.backgroundImage = 'url("' + url + '")';
+        av.textContent = "";
+    } else {
+        av.classList.remove("has-img");
+        av.style.backgroundImage = "";
+        av.textContent = p.name.charAt(0).toUpperCase();
+    }
+}
+
+function renderProfile() {
+    const p = profiles.get(profOpen);
+    if (!p) return;
+    profileCard.replaceChildren();
+    profileCard.setAttribute("aria-label", p.name + "'s profile");
+    if (profEditing && profDraft) renderProfileEdit(p);
+    else renderProfileView(p);
+    profNumber();
+}
+
+// Round icon buttons from the design. kind: "close", "remove", "backdrop" (change backdrop) or "avatar" (change picture).
+// The tooltip (data-tip) says what the button does, because the same red X is used both to
+// remove a picture and to close the pop-up.
+function iconButton(kind, tip, onClick, opts) {
+    opts = opts || {};
+    const b = mk("button", "prof-icon" + (kind === "close" || kind === "remove" ? " red" : " i-" + kind) + (opts.end ? " tip-end" : ""));
+    b.type = "button";
+    b.dataset.tip = tip;
+    b.setAttribute("aria-label", tip);
+    if (opts.disabled) b.setAttribute("aria-disabled", "true");
+    b.addEventListener("click", () => { if (!opts.disabled) onClick(); });
+    return b;
+}
+
+function renderProfileView(p) {
+    const mine = same(p.name, myName);
+    const banner = mk("div", "prof-banner");
+    paintBanner(banner, p);
+    const bannerTools = mk("div", "prof-banner-tools");
+    bannerTools.append(iconButton("close", "Close profile", closeProfile, { end: true }));
+    banner.append(bannerTools);
+
+    const body = mk("div", "prof-body");
+    const top = mk("div", "prof-top");
+    const avWrap = mk("div", "prof-avatar-wrap");
+    const av = mk("div", "prof-avatar");
+    paintAvatar(av, p);
+    avWrap.append(av);
+    top.append(avWrap);
+    if (p.thought) {
+        top.append(mk("div", "prof-thought", p.thought));
+    } else if (mine && p.loaded) {
+        top.append(mk("div", "prof-thought empty", "Add a thought bubble…"));
+    }
+    body.append(top, mk("h2", "prof-name", p.name));
+    profileCard.setAttribute("aria-label", p.name + "'s profile");
+
+    const status = mk("div", "prof-status");
+    const on = isOnline(p.name);
+    const pill = mk("span", "pill");
+    pill.dataset.state = on ? "online" : "offline";
+    pill.append(mk("span", "dot"), mk("span", "txt", on ? "Online" : "Offline"));
+    status.append(pill);
+    if (p.since) {
+        status.append(mk("span", "prof-since", "Member since " +
+            new Date(p.since * 1000).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" })));
+    }
+    body.append(status);
+
+    if (!p.loaded) {
+        body.append(mk("p", "prof-note", p.failed ? "Couldn't load this profile." : "Loading…"));
+        if (p.failed) {
+            const retry = mk("button", "prof-btn", "Try again");
+            retry.type = "button";
+            retry.addEventListener("click", () => { p.failed = false; renderProfile(); refreshProfile(profOpen); });
+            const row = mk("div", "prof-actions");
+            row.append(retry);
+            body.append(row);
+        }
+        profileCard.append(banner, body);
+        return;
+    }
+
+    const about = mk("div", "prof-sec");
+    const aboutHead = mk("div", "prof-head");
+    aboutHead.append(mk("h3", "", "About"));
+    if (mine) aboutHead.append(mk("span", "prof-count", p.bio.length + "/" + PROF.bio));   // only you see your own counter
+    about.append(aboutHead);
+    about.append(p.bio ? mk("p", "prof-bio", p.bio)
+        : mk("p", "prof-muted", mine ? "You haven't written a bio yet." : "No bio yet."));
+    body.append(about);
+
+    if (p.links.length) {
+        const sec = mk("div", "prof-sec");
+        sec.append(mk("h3", "", "Links"));
+        const ul = mk("ul", "prof-links");
+        p.links.forEach((x) => {
+            const li = mk("li");
+            const a = mk("a");
+            a.href = x.u;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer nofollow";
+            a.append(document.createTextNode(x.l || hostOf(x.u)));
+            if (x.l) a.append(mk("small", "", hostOf(x.u)));
+            li.append(a);
+            ul.append(li);
+        });
+        sec.append(ul);
+        body.append(sec);
+    } else if (mine) {
+        const sec = mk("div", "prof-sec");
+        sec.append(mk("h3", "", "Links"), mk("p", "prof-muted", "No links yet."));
+        body.append(sec);
+    }
+
+    const actions = mk("div", "prof-actions");
+    if (mine) {
+        const edit = mk("button", "prof-btn blue", "Edit Profile");
+        edit.type = "button";
+        edit.addEventListener("click", startProfileEdit);
+        actions.append(edit);
+
+        const account = mk("button", "prof-btn");   // no text label
+        account.type = "button";
+        account.title = "Change your username or password";
+        account.setAttribute("aria-label", "Account");
+        account.innerHTML = `
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <rect x="2.5" y="7" width="11" height="7.5" rx="1.8" fill="currentColor" />
+            <path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.8"
+                stroke-linecap="round" />
+        </svg>`;
+        account.addEventListener("click", () => { closeProfile(); openAccount($("meOpen")); });
+        actions.append(account);
+    } else {
+        const mention = mk("button", "prof-btn blue", "Mention @" + p.name);
+        mention.type = "button";
+        mention.addEventListener("click", () => { insertMention(p.name); closeProfile(); closeDrawers(); });
+        actions.append(mention);
+    }
+    body.append(actions);
+    profileCard.append(banner, body);
+}
+
+// ----- editing your own card -----
+function startProfileEdit() {
+    const p = profiles.get(profOpen);
+    if (!p || !same(p.name, myName)) return;
+    if (profSwapping) return;
+    const rows = p.links.map((x) => ({ l: x.l, u: x.u }));
+    while (rows.length < PROF.links) rows.push({ l: "", u: "" });
+    swapProfile(() => {
+        profDraft = {
+            thought: p.thought, bio: p.bio, links: rows, color: p.color,
+            avatar: null, avatarGone: false, avatarPreview: "",
+            backdrop: null, backdropGone: false, backdropPreview: "",
+            backdropFile: null, backdropDims: null, backdropPos: { x: 0.5, y: 0.5 },
+            saving: false, error: ""
+        };
+        profEditing = true;
+    }, 1, () => {
+        const f = profileCard.querySelector("input[type=text]");
+        if (f) f.focus({ preventScroll: true });
+    });
+}
+
+function discardDraftPreviews() {
+    if (!profDraft) return;
+    if (profDraft.avatarPreview) URL.revokeObjectURL(profDraft.avatarPreview);
+    if (profDraft.backdropPreview) URL.revokeObjectURL(profDraft.backdropPreview);
+}
+
+function cancelProfileEdit() {
+    if (profSwapping) return;
+    swapProfile(() => {
+        discardDraftPreviews();
+        profEditing = false;
+        profDraft = null;
+    }, -1, () => refreshProfile(profOpen));
+}
+
+// Crop the picture so it fills w x h, then squeeze it under maxBytes.
+// pos = { x, y } (0 to 1) says which part to keep when the picture is bigger than the frame in one direction:
+// 0 = left / top edge, 0.5 = the middle (default), 1 = right / bottom edge. Same meaning as CSS background-position.
+async function cropPicture(file, w, h, maxBytes, pos) {
+    const px = pos ? pos.x : 0.5, py = pos ? pos.y : 0.5;
+    if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
+    const src = await decodeImage(file);
+    const sw = src.naturalWidth || src.width;
+    const sh = src.naturalHeight || src.height;
+    if (!sw || !sh) throw new Error("Couldn't read that picture.");
+    const scale = Math.max(w / sw, h / sh);
+    const cw = w / scale, ch = h / scale;
+    const sx = (sw - cw) * px, sy = (sh - ch) * py;
+    let quality = 0.86, ow = w, oh = h;
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(ow);
+        canvas.height = Math.round(oh);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(src, sx, sy, cw, ch, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+        if (!blob) throw new Error("Couldn't process that picture.");
+        if (blob.size <= maxBytes) return blob;
+        if (quality > 0.5) quality -= 0.12; else { ow *= 0.85; oh *= 0.85; }
+    }
+    throw new Error("That picture is too detailed. Try a smaller one.");
+}
+
+async function chooseProfilePicture(kind, file) {
+    const d = profDraft;
+    if (!d || !file) return;
+    d.error = "";
+    try {
+        if (kind === "avatar") {
+            const blob = await cropPicture(file, AVATAR_PX, AVATAR_PX, AVATAR_MAX_BYTES);
+            if (d !== profDraft) return;                // the card was closed meanwhile
+            if (d.avatarPreview) URL.revokeObjectURL(d.avatarPreview);
+            d.avatar = blob;
+            d.avatarGone = false;
+            d.avatarPreview = URL.createObjectURL(blob);
+        } else {
+            // The backdrop is cropped when you press SAVE (see saveProfile), so until then you can drag the picture
+            // around inside the frame. The preview is the original picture; backdropPos says which part is shown.
+            if (!/^image\//.test(file.type)) throw new Error("That file isn't a picture.");
+            const src = await decodeImage(file);
+            const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height;
+            if (src.close) src.close();
+            if (!w || !h) throw new Error("Couldn't read that picture.");
+            if (d !== profDraft) return;
+            if (d.backdropPreview) URL.revokeObjectURL(d.backdropPreview);
+            d.backdropFile = file;
+            d.backdropDims = { w, h };
+            d.backdropPos = { x: 0.5, y: 0.5 };
+            d.backdrop = null;
+            d.backdropGone = false;
+            d.backdropPreview = URL.createObjectURL(file);
+        }
+    } catch (err) {
+        d.error = err.message;
+    }
+    if (profEditing && d === profDraft) renderProfile();
+}
+
+function removeProfilePicture(kind) {
+    const d = profDraft;
+    if (d[kind + "Preview"]) URL.revokeObjectURL(d[kind + "Preview"]);
+    d[kind] = null;
+    d[kind + "File"] = null;
+    d[kind + "Preview"] = "";
+    d[kind + "Gone"] = true;
+    renderProfile();
+}
+
+function filePicker(kind) {
+    const input = mk("input", "prof-file");
+    input.type = "file";
+    input.accept = "image/*";
+    input.addEventListener("change", () => {
+        const f = input.files && input.files[0];
+        input.value = "";
+        chooseProfilePicture(kind, f);
+    });
+    return input;
+}
+
+// ----- moving the backdrop picture inside its frame -----
+// The frame (.prof-banner) is always 3 : 1, the same shape as the saved backdrop, so what you see while dragging is what gets saved.
+// The picture covers the frame like CSS "background-size: cover" does; d.backdropPos is which part of it sticks out on each side.
+// Drag with the mouse or a finger, or focus the frame and use the arrow keys (Shift = bigger steps).
+const clamp01 = (n) => Math.min(1, Math.max(0, n));
+
+function setBackdropPos(banner, d, x, y) {
+    d.backdropPos = { x: clamp01(x), y: clamp01(y) };
+    banner.style.backgroundPosition = (d.backdropPos.x * 100) + "% " + (d.backdropPos.y * 100) + "%";
+}
+
+function enableBackdropReposition(banner, d, busy) {
+    const dims = d.backdropDims;
+    banner.style.backgroundPosition = (d.backdropPos.x * 100) + "% " + (d.backdropPos.y * 100) + "%";
+    // A picture that is already 3 : 1 fits exactly: there is nothing to move.
+    if (busy || Math.abs(dims.w / dims.h - BACKDROP_W / BACKDROP_H) < 0.01) return;
+
+    banner.classList.add("can-move");
+    banner.tabIndex = 0;
+    banner.setAttribute("role", "group");
+    banner.setAttribute("aria-label", "Backdrop position. Drag the picture, or use the arrow keys, to choose which part is shown.");
+    const hint = mk("span", "prof-banner-hint");
+    hint.setAttribute("aria-hidden", "true");
+    hint.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M2 12h20M12 2l-4 4M12 2l4 4M12 22l-4-4M12 22l4-4M2 12l4-4M2 12l4 4M22 12l-4-4M22 12l-4 4"/></svg>';
+    hint.append("Drag to reposition");
+    banner.append(hint);
+
+    // how far the picture sticks out of the frame, in pixels, across and down
+    const overflow = () => {
+        const r = banner.getBoundingClientRect();
+        const scale = Math.max(r.width / dims.w, r.height / dims.h);
+        return { x: dims.w * scale - r.width, y: dims.h * scale - r.height };
+    };
+
+    banner.addEventListener("pointerdown", (e) => {
+        if (e.button > 0 || e.target.closest(".prof-banner-tools")) return;
+        e.preventDefault();
+        const over = overflow();
+        const from = { x: e.clientX, y: e.clientY, px: d.backdropPos.x, py: d.backdropPos.y };
+        banner.setPointerCapture(e.pointerId);
+        banner.classList.add("moving");
+        hint.classList.add("used");
+        const move = (ev) => {
+            // dragging the picture to the right shows more of its left side, so the position goes down
+            setBackdropPos(banner, d,
+                over.x > 1 ? from.px - (ev.clientX - from.x) / over.x : from.px,
+                over.y > 1 ? from.py - (ev.clientY - from.y) / over.y : from.py);
+        };
+        const end = () => {
+            banner.classList.remove("moving");
+            banner.removeEventListener("pointermove", move);
+            banner.removeEventListener("pointerup", end);
+            banner.removeEventListener("pointercancel", end);
+        };
+        banner.addEventListener("pointermove", move);
+        banner.addEventListener("pointerup", end);
+        banner.addEventListener("pointercancel", end);
+    });
+
+    banner.addEventListener("keydown", (e) => {
+        const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+        if (!dir || e.target !== banner) return;
+        e.preventDefault();
+        const step = e.shiftKey ? 0.15 : 0.05;
+        const over = overflow();
+        // the arrow moves the picture that way, like dragging does
+        setBackdropPos(banner, d,
+            over.x > 1 ? d.backdropPos.x - dir[0] * step : d.backdropPos.x,
+            over.y > 1 ? d.backdropPos.y - dir[1] * step : d.backdropPos.y);
+        hint.classList.add("used");
+    });
+}
+
+function renderProfileEdit(p) {
+    const d = profDraft;
+    const busy = d.saving;
+    const view = Object.assign({}, p, { color: d.color });
+
+    // what the card will show once saved: the new picture, or none if it is being removed
+    const bgUrl = d.backdropGone ? "" : (d.backdropPreview || p.backdropUrl);
+    const avUrl = d.avatarGone ? "" : (d.avatarPreview || p.avatarUrl);
+
+    // backdrop: change (picture icon) and remove (red X)
+    const banner = mk("div", "prof-banner");
+    paintBanner(banner, view, bgUrl);
+    const bpick = filePicker("backdrop");
+    const bannerTools = mk("div", "prof-banner-tools");
+    bannerTools.append(
+        iconButton("backdrop", "Change backdrop image", () => bpick.click(), { disabled: busy, end: true }),
+        iconButton("remove", "Remove backdrop image", () => removeProfilePicture("backdrop"), { disabled: busy || !bgUrl, end: true }));
+    banner.append(bannerTools, bpick);
+    if (d.backdropFile && d.backdropDims && !d.backdropGone) enableBackdropReposition(banner, d, busy);
+
+    const body = mk("form", "prof-body prof-form");
+    body.autocomplete = "off";
+    body.addEventListener("submit", (e) => { e.preventDefault(); saveProfile(); });
+
+    // picture (change / remove) + thought bubble
+    const top = mk("div", "prof-top");
+    const avWrap = mk("div", "prof-avatar-wrap");
+    const av = mk("div", "prof-avatar");
+    paintAvatar(av, view, avUrl);
+    const apick = filePicker("avatar");
+    const atools = mk("div", "prof-avatar-tools");
+    atools.append(
+        iconButton("avatar", "Change profile picture", () => apick.click(), { disabled: busy }),
+        iconButton("remove", "Remove profile picture", () => removeProfilePicture("avatar"), { disabled: busy || !avUrl }));
+    avWrap.append(av, atools, apick);
+    top.append(avWrap);
+    const thought = mk("input", "field");
+    thought.type = "text";
+    thought.maxLength = PROF.thought;
+    thought.value = d.thought;
+    thought.placeholder = "What's on your mind?";
+    thought.setAttribute("aria-label", "Thought bubble");
+    thought.disabled = busy;
+    thought.addEventListener("input", () => { d.thought = thought.value; });
+    top.append(thought);
+    body.append(top);
+
+    body.append(mk("h2", "prof-name", p.name));
+
+    const head = mk("div", "prof-head");
+    const bioLabel = mk("label", "", "About You");
+    const count = mk("span", "prof-count", d.bio.length + "/" + PROF.bio);
+    head.append(bioLabel, count);
+    const bio = mk("textarea", "field");
+    bio.maxLength = PROF.bio;
+    bio.value = d.bio;
+    bio.placeholder = "Tell people a little about yourself";
+    bio.disabled = busy;
+    bio.addEventListener("input", () => { d.bio = bio.value; count.textContent = bio.value.length + "/" + PROF.bio; });
+    bioLabel.htmlFor = bio.id = "profBio";
+    body.append(head, bio);
+
+    body.append(mk("div", "lbl", "Links (up to " + PROF.links + ")"));
+    d.links.forEach((row) => {
+        const wrap = mk("div", "prof-link-row");
+        const l = mk("input", "field");
+        l.type = "text";
+        l.maxLength = PROF.linkLabel;
+        l.placeholder = "Name";
+        l.value = row.l;
+        l.setAttribute("aria-label", "Link name");
+        l.disabled = busy;
+        l.addEventListener("input", () => { row.l = l.value; });
+        const u = mk("input", "field");
+        u.type = "text";
+        u.inputMode = "url";
+        u.maxLength = PROF.linkUrl;
+        u.placeholder = "https://example.com";
+        u.value = row.u;
+        u.setAttribute("aria-label", "Link address");
+        u.disabled = busy;
+        u.addEventListener("input", () => { row.u = u.value; });
+        wrap.append(l, u);
+        body.append(wrap);
+    });
+
+    const err = mk("p", "prof-error", d.error);
+    err.hidden = !d.error;
+    err.setAttribute("role", "alert");
+    body.append(err);
+
+    const actions = mk("div", "prof-actions");
+    const save = mk("button", "prof-btn blue", busy ? "Saving…" : "SAVE");
+    save.type = "submit";
+    save.disabled = busy;
+    const cancel = mk("button", "prof-btn", "Cancel");
+    cancel.type = "button";
+    cancel.disabled = busy;
+    cancel.addEventListener("click", cancelProfileEdit);
+    actions.append(save, cancel);
+    body.append(actions);
+
+    profileCard.append(banner, body);
+}
+
+// Sends one picture to the server in small pieces (same idea as sending a chat picture).
+async function uploadProfilePicture(kind, blob) {
+    const data = await blobToBase64(blob);
+    const parts = [];
+    for (let i = 0; i < data.length; i += CHUNK_CHARS) parts.push(data.slice(i, i + CHUNK_CHARS));
+    if (parts.length < 1 || parts.length > 99) throw new Error("That picture is too big.");
+    if (!sendPacket("PFUH", myId, "", mySecret + "|" + kind + "|" + blob.type + "|" + parts.length)) throw new Error("Not connected.");
+    for (let i = 0; i < parts.length; i++) {
+        while (socket && socket.bufferedAmount > 256 * 1024) await sleep(20);
+        if (!sendPacket("PFUC", myId, "", i + "|" + parts[i])) throw new Error("Connection lost while sending.");
+        if (i % 3 === 2) await sleep(CHUNK_PACKET_DELAY_MS);
+    }
+}
+
+async function saveProfile() {
+    const d = profDraft;
+    if (!d || d.saving) return;
+
+    const links = [];
+    for (const row of d.links) {
+        const u = normalizeUrl(row.u);
+        if (!u) continue;
+        if (!/^https?:\/\/[^\s]+$/i.test(u) || u.length > PROF.linkUrl) {
+            d.error = "\"" + row.u.trim() + "\" doesn't look like a web address (it must start with http:// or https://, up to " + PROF.linkUrl + " characters).";
+            renderProfile();
+            return;
+        }
+        links.push({ l: row.l.trim(), u });
+    }
+    const enc = {
+        thought: encodeURIComponent(d.thought.trim().slice(0, PROF.thought)),
+        bio: encodeURIComponent(d.bio.trim().slice(0, PROF.bio)),
+        links: links.length ? encodeURIComponent(JSON.stringify(links)) : ""
+    };
+    for (const k of ["thought", "bio", "links"]) {
+        if (enc[k].length > PROF_ENC_MAX[k]) {
+            d.error = "Your " + (k === "links" ? "links are" : k === "bio" ? "bio is" : "thought bubble is") + " too long once saved. Please shorten it.";
+            renderProfile();
+            return;
+        }
+    }
+
+    d.saving = true;
+    d.error = "";
+    renderProfile();
+    try {
+        // the backdrop is cut out of the picture you chose, at the spot you dragged it to
+        if (d.backdropFile && !d.backdropGone) {
+            d.backdrop = await cropPicture(d.backdropFile, BACKDROP_W, BACKDROP_H, BACKDROP_MAX_BYTES, d.backdropPos);
+        }
+        // the server answers PROFOK (or PROFERR) after PROFDONE
+        const ack = new Promise((resolve, reject) => {
+            profAck = { resolve, reject };
+            setTimeout(() => reject(new Error("The server didn't answer. Please try again.")), 20000);
+        });
+        ack.catch(() => { });
+        if (d.avatarGone) sendPacket("PFUDEL", myId, "", mySecret + "|avatar");
+        else if (d.avatar) await uploadProfilePicture("avatar", d.avatar);
+        if (d.backdropGone) sendPacket("PFUDEL", myId, "", mySecret + "|backdrop");
+        else if (d.backdrop) await uploadProfilePicture("backdrop", d.backdrop);
+        const send = (field, value) => {
+            if (!sendPacket("PROFF", myId, "", mySecret + "|" + field + "|" + value)) throw new Error("Not connected.");
+        };
+        send("thought", enc.thought);
+        send("bio", enc.bio);
+        send("links", enc.links);
+        send("color", d.color);
+        if (!sendPacket("PROFDONE", myId, "", mySecret)) throw new Error("Not connected.");
+        await ack;
+    } catch (err) {
+        profAck = null;
+        if (d === profDraft) {
+            d.saving = false;
+            d.error = err.message || "Couldn't save your profile.";
+            renderProfile();
+        }
+        return;
+    }
+    profAck = null;
+    if (d !== profDraft) return;           // closed while saving: the change is saved anyway
+    const finishSave = () => {
+        discardDraftPreviews();
+        profEditing = false;
+        profDraft = null;
+        const p = profiles.get(profOpen);
+        if (p) { p.loaded = true; }
+    };
+    if (!swapProfile(finishSave, -1, () => refreshProfile(profOpen))) {
+        finishSave();
+        renderProfile();
+        refreshProfile(profOpen);
+    }
+}
+
+function onProfileSaved() {
+    if (profAck) profAck.resolve();
+}
+
+function onProfileError(text) {
+    if (profAck) profAck.reject(new Error(text));
+    else addSystem("Couldn't save your profile: " + text, current);
+}
+
+// ----- ways in -----
+const userCard = document.querySelector(".usercard");
+userCard.addEventListener("click", (e) => {
+    if (!joined || e.target.closest("#logoutBtn, #acctBtn")) return;
+    openProfile(myName);
+});
+$("meOpen").addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && joined) { e.preventDefault(); openProfile(myName); }
+});
+
+
+buildChannelList();
+renderChannelHeader();
+updateBadges();
+renderChannel();
+if (stored) connect();
+
+// ==========================================================
+// ACCOUNT SETTINGS: change your username and / or your password
+// ==========================================================
+// A pop-up of its own, separate from the profile card (bio, backdrop, picture...), because this is sensitive:
+//   1. #acctModal         the form: new username, new password (twice) and your CURRENT password.
+//   2. #acctConfirm       opens on top when you press "Review changes": a summary of what will change and
+//                         "Accept changes" / "Go back". Nothing is sent to the server before you accept.
+// Accepting sends ACCTF packets (cur / name / pw) and ACCTDO. The server answers ACCTOK or ACCTERR. After a
+// username change it tells every browser with NAMECHG||old|new, and onNameChanged() renames you everywhere
+// (member list, messages, typing dots...). You stay logged in: the login secret doesn't change.
+// The look is in style.css under "ACCOUNT SETTINGS" and reuses the profile card's animations.
+const ACCT = { nameMin: 2, nameMax: 16, pwMin: 4, pwMax: 100 };
+const ACCT_OUT_MS = 440;           // how long the closing animation runs before a pop-up is hidden
+const ACCT_WAIT_MS = 20000;        // how long we wait for the server to answer
+const acctModal = $("acctModal"), acctCard = $("acctCard");
+const acctConfirm = $("acctConfirm"), acctConfirmCard = $("acctConfirmCard");
+const LOCK_SVG = '<svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true"><rect x="2.5" y="7" width="11" height="7.5" rx="1.8" fill="currentColor"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+
+let acctFields = null;       // the inputs of the open form: { name, pw, pw2, cur, error, review }
+let acctUi = null;           // the buttons of the confirm pop-up: { accept, back }
+let acctPending = null;      // what is waiting for "Accept": { name, pw, cur } ("" = unchanged)
+let acctOpener = null;       // what had focus before the pop-up opened
+let acctBusy = false;        // true while the server is saving
+let acctAck = null;          // { resolve, reject } while a save waits for the server
+let acctAckTimer = null;
+let acctCloseTimer = null, acctConfirmTimer = null;
+
+// ----- the form -----
+function openAccount(opener) {
+    if (!joined || !acctModal.hidden) return;
+    clearTimeout(acctCloseTimer);
+    acctOpener = opener || document.activeElement;
+    acctBusy = false;
+    acctPending = null;
+    renderAccount();
+    acctModal.classList.remove("is-closing");
+    acctModal.hidden = false;
+    acctFields.name.focus({ preventScroll: true });
+}
+
+function acctInput(id, type, placeholder, maxLength, autocomplete) {
+    const i = mk("input", "field");
+    i.id = id;
+    i.type = type;
+    i.placeholder = placeholder;
+    i.maxLength = maxLength;
+    i.autocomplete = autocomplete;
+    i.spellcheck = false;
+    i.setAttribute("autocapitalize", "off");
+    return i;
+}
+
+function acctLabel(forId, text) {
+    const l = mk("label", "lbl", text);
+    l.htmlFor = forId;
+    return l;
+}
+
+function renderAccount() {
+    acctCard.replaceChildren();
+
+    const head = mk("div", "acct-head");
+    const title = mk("h2", "acct-title");
+    title.id = "acctTitle";
+    const lock = mk("span", "acct-lock");
+    lock.innerHTML = LOCK_SVG;
+    title.append(lock, "Account Settings");
+    const tools = mk("div", "prof-banner-tools");
+    tools.append(iconButton("close", "Close account settings", closeAccount, { end: true }));
+    head.append(title, tools);
+    acctCard.setAttribute("aria-labelledby", "acctTitle");
+    acctCard.removeAttribute("aria-label");
+
+    const form = mk("form", "prof-body prof-form acct-form");
+    form.autocomplete = "off";
+    form.noValidate = true;
+    form.addEventListener("submit", (e) => { e.preventDefault(); reviewAccount(); });
+    form.addEventListener("input", acctClearError);
+
+    let row = 1;
+    const section = (...kids) => {
+        const sec = mk("section", "acct-sec");
+        sec.style.setProperty("--r", row++);
+        sec.append(...kids);
+        return sec;
+    };
+
+    const intro = mk("p", "acct-intro", "Update your sign-in details here. Before anything is saved you'll see a summary and be asked to accept it.");
+
+    // username
+    const now = mk("p", "acct-now");
+    now.append("You are signed in as ", mk("b", "", myName), ".");
+    const name = acctInput("acctName", "text", "New username (leave empty to keep)", ACCT.nameMax, "off");
+    const nameSec = section(mk("h3", "", "Username"), now, acctLabel("acctName", "New username"), name,
+        mk("p", "acct-hint", ACCT.nameMin + " to " + ACCT.nameMax + " characters."));
+
+    // password
+    const pw = acctInput("acctPw", "password", "New password (leave empty to keep)", ACCT.pwMax, "new-password");
+    const pw2 = acctInput("acctPw2", "password", "Type the new password again", ACCT.pwMax, "new-password");
+    const pwSec = section(mk("h3", "", "Password"), acctLabel("acctPw", "New password"), pw,
+        acctLabel("acctPw2", "Confirm new password"), pw2,
+        mk("p", "acct-hint", "At least " + ACCT.pwMin + " characters."));
+
+    // proof that it is you
+    const cur = acctInput("acctCur", "password", "Your current password", ACCT.pwMax, "current-password");
+    const curSec = section(mk("h3", "", "Is it really you?"), acctLabel("acctCur", "Current password"), cur,
+        mk("p", "acct-hint", "Needed for any change, even if you only change your username."));
+
+    // show / hide the three password boxes
+    const showRow = mk("label", "acct-check");
+    const show = mk("input");
+    show.type = "checkbox";
+    show.addEventListener("change", () => {
+        [pw, pw2, cur].forEach((f) => { f.type = show.checked ? "text" : "password"; });
+    });
+    showRow.append(show, mk("span", "", "Show passwords"));
+
+    const error = mk("div", "prof-error");
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+
+    const actions = mk("div", "prof-actions");
+    const review = mk("button", "prof-btn blue", "Review changes");
+    review.type = "submit";
+    review.style.setProperty("--r", 4);
+    const cancel = mk("button", "prof-btn", "Cancel");
+    cancel.type = "button";
+    cancel.style.setProperty("--r", 5);
+    cancel.addEventListener("click", closeAccount);
+    actions.append(review, cancel);
+
+    form.append(intro, nameSec, pwSec, curSec, showRow, error, actions);
+    acctCard.append(head, form);
+    acctFields = { name, pw, pw2, cur, error, review };
+}
+
+function acctShowError(text, focusEl) {
+    if (!acctFields) return;
+    const e = acctFields.error;
+    e.hidden = true;                // hide, then show again, so the shake plays every time
+    void e.offsetWidth;
+    e.textContent = text;
+    e.hidden = false;
+    if (focusEl) focusEl.focus({ preventScroll: true });
+}
+
+function acctClearError() {
+    if (acctFields) acctFields.error.hidden = true;
+}
+
+// "Review changes": check everything here first, then ask the user to accept.
+function reviewAccount() {
+    if (acctBusy || !acctFields) return;
+    const F = acctFields;
+    const name = F.name.value.trim();
+    const pw = F.pw.value;
+    const pw2 = F.pw2.value;
+    const cur = F.cur.value;
+    const nameChanged = name !== "" && name !== myName;
+    const pwChanged = pw !== "";
+
+    if (!nameChanged && !pwChanged) {
+        acctShowError(name !== "" ? "That is already your username. Type a different one, or choose a new password."
+            : "Type a new username, a new password, or both.", F.name);
+        return;
+    }
+    if (nameChanged) {
+        if (name.length < ACCT.nameMin || name.length > ACCT.nameMax) { acctShowError("Username needs " + ACCT.nameMin + " to " + ACCT.nameMax + " characters.", F.name); return; }
+        if (name.indexOf("|") >= 0) { acctShowError("Usernames can't contain the | character.", F.name); return; }
+        if (registered.has(name.toLowerCase()) && !same(name, myName)) { acctShowError("That username is already taken.", F.name); return; }
+    }
+    if (pwChanged) {
+        if (pw.length < ACCT.pwMin) { acctShowError("Your new password needs at least " + ACCT.pwMin + " characters.", F.pw); return; }
+        if (pw !== pw2) { acctShowError("The two new passwords don't match.", F.pw2); return; }
+    }
+    if (cur === "") { acctShowError("Type your current password so we know it's you.", F.cur); return; }
+    if (pwChanged && pw === cur) { acctShowError("Your new password must be different from your current one.", F.pw); return; }
+
+    acctPending = { name: nameChanged ? name : "", pw: pwChanged ? pw : "", cur };
+    openAcctConfirm();
+}
+
+function closeAccount() {
+    if (acctModal.hidden || acctModal.classList.contains("is-closing") || acctBusy) return;
+    acctPending = null;
+    if (acctOpener && acctOpener.focus && acctOpener.isConnected) { try { acctOpener.focus({ preventScroll: true }); } catch (err) { } }
+    acctOpener = null;
+    if (PROF_REDUCED.matches) { finishAcctClose(); return; }
+    acctModal.classList.add("is-closing");
+    clearTimeout(acctCloseTimer);
+    acctCloseTimer = setTimeout(finishAcctClose, ACCT_OUT_MS);
+}
+
+function finishAcctClose() {
+    clearTimeout(acctCloseTimer);
+    acctModal.hidden = true;
+    acctModal.classList.remove("is-closing");
+    acctCard.replaceChildren();      // the typed passwords leave with the form
+    acctFields = null;
+}
+
+acctModal.addEventListener("mousedown", (e) => { if (e.target === acctModal) closeAccount(); });
+
+// ----- "Accept these changes?" -----
+function openAcctConfirm() {
+    if (!acctPending) return;
+    clearTimeout(acctConfirmTimer);
+    renderAcctConfirm();
+    acctConfirm.classList.remove("is-closing");
+    acctConfirm.hidden = false;
+    acctUi.back.focus({ preventScroll: true });     // Enter right after "Review changes" must not accept by accident
+}
+
+function renderAcctConfirm() {
+    const c = acctPending;
+    acctConfirmCard.replaceChildren();
+
+    const head = mk("div", "acct-head warn");
+    const title = mk("h2", "acct-title");
+    title.id = "acctConfirmTitle";
+    title.append(mk("span", "acct-badge", "!"), "Accept these changes?");
+    head.append(title);
+    acctConfirmCard.setAttribute("aria-labelledby", "acctConfirmTitle");
+    acctConfirmCard.removeAttribute("aria-label");
+
+    const body = mk("div", "prof-body acct-body");
+    const intro = mk("p", "acct-intro", "Please check the summary below. Nothing is saved until you accept.");
+
+    // the summary: one row per thing that can change
+    const summary = mk("div", "acct-summary");
+    summary.setAttribute("role", "list");
+    const nameRow = mk("div", "acct-row");
+    nameRow.setAttribute("role", "listitem");
+    nameRow.style.setProperty("--r", 1);
+    nameRow.append(mk("span", "acct-key", "Username"));
+    const nameVal = mk("span", "acct-val");
+    if (c.name) {
+        const arrow = mk("span", "acct-arrow", "\u2192");
+        arrow.setAttribute("aria-label", "changes to");
+        nameVal.append(mk("span", "acct-chip old", myName), arrow, mk("span", "acct-chip new", c.name));
+    } else {
+        nameVal.append(mk("span", "acct-same", "No change"));
+    }
+    nameRow.append(nameVal);
+
+    const pwRow = mk("div", "acct-row");
+    pwRow.setAttribute("role", "listitem");
+    pwRow.style.setProperty("--r", 2);
+    pwRow.append(mk("span", "acct-key", "Password"));
+    const pwVal = mk("span", "acct-val");
+    if (c.pw) {
+        const dots = mk("span", "acct-dots", "\u2022".repeat(Math.min(c.pw.length, 14)));
+        dots.setAttribute("aria-hidden", "true");
+        pwVal.append(dots, mk("span", "acct-count", c.pw.length + " characters"), mk("span", "acct-tag", "New"));
+    } else {
+        pwVal.append(mk("span", "acct-same", "No change"));
+    }
+    pwRow.append(pwVal);
+    summary.append(nameRow, pwRow);
+
+    const notes = mk("ul", "acct-notes");
+    notes.style.setProperty("--r", 3);
+    notes.append(mk("li", "", "You'll stay signed in on this device."));
+    if (c.name) notes.append(mk("li", "", "Everyone in the chat sees your new username straight away, and \"" + myName + "\" becomes free for someone else to take."));
+    if (c.pw) notes.append(mk("li", "", "Use the new password the next time you log in."));
+
+    const actions = mk("div", "prof-actions");
+    const accept = mk("button", "prof-btn green", "Accept changes");
+    accept.type = "button";
+    accept.style.setProperty("--r", 4);
+    accept.addEventListener("click", acceptAccount);
+    const back = mk("button", "prof-btn", "Go back");
+    back.type = "button";
+    back.style.setProperty("--r", 5);
+    back.addEventListener("click", () => closeAcctConfirm(() => { if (acctFields) acctFields.review.focus({ preventScroll: true }); }));
+    actions.append(accept, back);
+
+    body.append(intro, summary, notes, actions);
+    acctConfirmCard.append(head, body);
+    acctUi = { accept, back };
+}
+
+function setAcctBusy(on) {
+    acctBusy = on;
+    if (!acctUi) return;
+    acctUi.accept.disabled = on;
+    acctUi.back.disabled = on;
+    acctUi.accept.textContent = on ? "Saving\u2026" : "Accept changes";
+}
+
+function closeAcctConfirm(after) {
+    if (acctConfirm.hidden || acctConfirm.classList.contains("is-closing")) { if (after) after(); return; }
+    clearTimeout(acctConfirmTimer);
+    const done = () => {
+        clearTimeout(acctConfirmTimer);
+        acctConfirm.hidden = true;
+        acctConfirm.classList.remove("is-closing");
+        acctConfirmCard.replaceChildren();
+        acctUi = null;
+        if (after) after();
+    };
+    if (PROF_REDUCED.matches) { done(); return; }
+    acctConfirm.classList.add("is-closing");
+    acctConfirmTimer = setTimeout(done, ACCT_OUT_MS);
+}
+
+acctConfirm.addEventListener("mousedown", (e) => {
+    if (e.target === acctConfirm && !acctBusy) closeAcctConfirm(() => { if (acctFields) acctFields.review.focus({ preventScroll: true }); });
+});
+
+// "Accept changes": send the three pieces (always all three, empty = unchanged), then ACCTDO, then wait for the answer.
+async function acceptAccount() {
+    if (acctBusy || !acctPending) return;
+    const c = acctPending;
+    setAcctBusy(true);
+    let result = null;
+    try {
+        const ack = new Promise((resolve, reject) => {
+            acctAck = { resolve, reject };
+            acctAckTimer = setTimeout(() => reject(new Error("The server didn't answer. Please try again.")), ACCT_WAIT_MS);
+        });
+        ack.catch(() => { });
+        const send = (field, value) => {
+            if (!sendPacket("ACCTF", myId, "", mySecret + "|" + field + "|" + value)) throw new Error("Not connected. Please try again in a moment.");
+        };
+        send("cur", c.cur);
+        send("name", c.name);
+        send("pw", c.pw);
+        if (!sendPacket("ACCTDO", myId, "", mySecret)) throw new Error("Not connected. Please try again in a moment.");
+        result = await ack;
+    } catch (err) {
+        clearTimeout(acctAckTimer);
+        acctAck = null;
+        setAcctBusy(false);
+        acctFailed(err.message || "Couldn't save your changes.");
+        return;
+    }
+    clearTimeout(acctAckTimer);
+    acctAck = null;
+    setAcctBusy(false);
+    acctPending = null;
+    const f = result.flags || "";
+    const text = f.indexOf("n") >= 0 && f.indexOf("p") >= 0 ? "Username and password updated"
+        : f.indexOf("n") >= 0 ? "Username changed to " + result.name
+            : "Password updated";
+    closeAcctConfirm();
+    closeAccount();
+    setTimeout(() => showAcctToast(text), 320);
+}
+
+// Back to the form, with the reason shown above the buttons.
+function acctFailed(text) {
+    acctPending = null;
+    closeAcctConfirm(() => {
+        if (!acctFields) return;
+        const target = /current password/i.test(text) ? acctFields.cur : /username/i.test(text) ? acctFields.name : null;
+        if (target === acctFields.cur) acctFields.cur.value = "";
+        acctShowError(text, target);
+    });
+}
+
+function onAcctOk(m) {
+    if (acctAck) acctAck.resolve({ name: m.name, flags: m.payload || "" });
+}
+
+function onAcctError(text) {
+    if (acctAck) acctAck.reject(new Error(text));
+    else addSystem("Couldn't change your account: " + text, current);
+}
+
+// A green popup in the bottom right corner (the same stack as "<name> joined the chat").
+function showAcctToast(text) {
+    placeJoinToasts();
+    while (joinToasts.children.length >= MAX_JOIN_TOASTS) joinToasts.firstElementChild.remove();
+    const t = mk("div", "join-toast acct-toast");
+    t.append(mk("span", "acct-done"), mk("span", "", text));
+    joinToasts.append(t);
+    setTimeout(() => dismissJoinToast(t), JOIN_TOAST_MS + 1500);
+}
+
+// ----- somebody changed their username (NAMECHG) -----
+// The account is the same, only the name changed, so everything we know about the old name moves to the new one.
+function onNameChanged(oldName, newName) {
+    if (!oldName || !newName) return;
+    const oldKey = oldName.toLowerCase(), newKey = newName.toLowerCase();
+    const mine = same(oldName, myName);
+    if (mine) {
+        myName = newName;
+        saveSession(myId, newName, mySecret);
+        $("meName").textContent = newName;
+    }
+
+    // messages already on screen (and in the saved history of this visit)
+    let touched = false;
+    CHANNELS.forEach((c) => {
+        store[c.id].items.forEach((it) => {
+            if (!it.name || !same(it.name, oldName)) return;
+            it.name = newName;
+            if (it.id === "h:" + oldKey) it.id = "h:" + newKey;     // keeps grouping working for saved messages
+            touched = true;
+        });
+    });
+
+    peers.forEach((p) => { if (same(p.name, oldName)) p.name = newName; });
+    typers.forEach((t) => { if (same(t.name, oldName)) t.name = newName; });
+    registered.delete(oldKey);
+    registered.set(newKey, newName);
+    askedAbout.add(newKey);
+
+    // the profile we already loaded belongs to the account, so keep it (and its pictures) under the new name
+    const p = profiles.get(oldKey);
+    if (p) {
+        p.name = newName;
+        if (oldKey !== newKey) {
+            profiles.delete(oldKey);
+            profiles.set(newKey, p);
+            if (avatarAsked.delete(oldKey)) avatarAsked.add(newKey);
+        }
+        if (profOpen === oldKey) profOpen = newKey;
+    }
+    if (profOpen === newKey && !profEditing && !profileModal.hidden) renderProfile();
+    if (mine) decorateAvatar($("meAvatar"), newName);      // after the profile moved, so your picture stays
+
+    renderUsers();
+    renderTyping();
+    if (touched) {
+        const top = logEl.scrollTop;
+        renderChannel();
+        logEl.scrollTop = top;
+    }
+    if (mine) {
+        sendPacket("HERE", myId, myName, "");       // tell everybody the new name right away
+        logLine("System", "Your username is now " + myName + ".");
+    } else {
+        logLine("System", oldName + " is now called " + newName + ".");
+    }
+}
+
+// ----- ways in -----
+$("acctBtn").addEventListener("click", () => openAccount($("acctBtn")));
+
+// Escape closes the top-most account pop-up (the confirm one first), and Tab stays inside it.
+// Runs before the page-wide Escape handler so that one key press only closes one thing.
+window.addEventListener("keydown", (e) => {
+    const top = !acctConfirm.hidden ? acctConfirm : (!acctModal.hidden ? acctModal : null);
+    if (!top) return;
+    if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (acctBusy) return;
+        if (top === acctConfirm) closeAcctConfirm(() => { if (acctFields) acctFields.review.focus({ preventScroll: true }); });
+        else closeAccount();
+        return;
+    }
+    if (e.key !== "Tab") return;
+    const items = Array.from(top.querySelectorAll("button, input, textarea, select, a[href]"))
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!items.length) { e.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (!top.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}, true);

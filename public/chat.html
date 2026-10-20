@@ -7,15 +7,18 @@
     <title>BISCORD</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap"
+    <link
+        href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&family=Poppins:wght@400;500;600;700&display=swap"
         rel="stylesheet">
 
     <link rel="stylesheet" href="style.css">
+    <!-- page transitions: must load in the head so the new page is covered from its first frame -->
+    <script src="/scripts/transition.js"></script>
 </head>
 
 <body>
 
-    <!-- ===================== JOIN ===================== -->
+    <!-- ===================== LOADING (shown until the server confirms your login) ===================== -->
     <main id="joinScreen" class="screen active">
         <section class="join-card">
             <svg class="mascot" viewBox="0 0 120 110" aria-hidden="true">
@@ -32,47 +35,11 @@
             </svg>
 
             <h1 class="logo">BISCORD</h1>
-            <p id="authTagline" class="tagline">Welcome back! Log in to jump in.</p>
-
-            <div class="auth-tabs" role="tablist">
-                <button id="tabLogin" class="auth-tab active" type="button" role="tab" aria-selected="true">Log
-                    in</button>
-                <button id="tabSignup" class="auth-tab" type="button" role="tab" aria-selected="false">Sign up</button>
+            <p class="tagline">Getting your chat ready...</p>
+            <div class="join-actions">
+                <span id="joinStatus" class="pill" data-state="connecting"><span class="dot"></span><span
+                        class="txt">Connecting</span></span>
             </div>
-
-            <!-- Log in -->
-            <form id="loginForm" autocomplete="off">
-                <label for="loginUser">Username</label>
-                <input id="loginUser" class="field" type="text" maxlength="16" placeholder="Your username" disabled>
-
-                <label for="loginPass" class="gap">Password</label>
-                <input id="loginPass" class="field" type="password" placeholder="Your password" disabled>
-
-                <p id="loginError" class="error" role="alert" hidden></p>
-                <div class="join-actions">
-                    <span id="joinStatus" class="pill" data-state="connecting"><span class="dot"></span><span
-                            class="txt">Connecting</span></span>
-                    <button id="loginBtn" class="btn blue" type="submit" disabled>Log in</button>
-                </div>
-            </form>
-
-            <!-- Sign up -->
-            <form id="signupForm" autocomplete="off" hidden>
-                <label for="signupUser">Username</label>
-                <input id="signupUser" class="field" type="text" maxlength="16" placeholder="e.g. PixelPanda" disabled>
-                <p class="hint">2 to 16 characters. The | symbol is not allowed.</p>
-
-                <label for="signupPass" class="gap">Password</label>
-                <input id="signupPass" class="field" type="password" placeholder="Pick a password" disabled>
-
-                <label for="signupConfirm" class="gap">Confirm password</label>
-                <input id="signupConfirm" class="field" type="password" placeholder="Type it again" disabled>
-
-                <p id="signupError" class="error" role="alert" hidden></p>
-                <div class="join-actions">
-                    <button id="signupBtn" class="btn blue" type="submit" disabled>Create account</button>
-                </div>
-            </form>
         </section>
     </main>
 
@@ -87,12 +54,23 @@
                 <ul id="channelList" class="channel-list"></ul>
             </div>
             <div class="usercard">
-                <div id="meAvatar" class="avatar"></div>
-                <div class="who">
-                    <b id="meName"></b>
-                    <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span
-                            class="txt">Connecting</span></span>
+                <div id="meOpen" class="me-open" role="button" tabindex="0" aria-haspopup="dialog"
+                    title="View and edit your profile">
+                    <div id="meAvatar" class="avatar"></div>
+                    <div class="who">
+                        <b id="meName"></b>
+                        <span id="chatStatus" class="pill" data-state="connecting"><span class="dot"></span><span
+                                class="txt">Connecting</span></span>
+                    </div>
                 </div>
+                <!-- <button id="acctBtn" class="btn small acct-btn" type="button" aria-haspopup="dialog"
+                    aria-label="Account settings" title="Account settings (username and password)">
+                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                        <rect x="2.5" y="7" width="11" height="7.5" rx="1.8" fill="currentColor" />
+                        <path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" />
+                    </svg>
+                </button> -->
                 <button id="logoutBtn" class="btn small" type="button" title="Log out">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
                         class="bi bi-box-arrow-right" viewBox="0 0 16 16">
@@ -131,6 +109,16 @@
 
             <div id="dropHint" class="drop-hint" hidden>Drop a picture to send it</div>
 
+            <div id="replyBar" class="reply-bar" hidden>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9 14 4 9l5-5" />
+                    <path d="M4 9h10a6 6 0 0 1 6 6v4" />
+                </svg>
+                <span class="reply-bar-body">Replying to <b id="replyWho"></b><span id="replyText" class="reply-bar-text"></span></span>
+                <button id="replyCancel" class="act-btn" type="button" aria-label="Cancel reply" title="Cancel reply (Esc)">&#10005;</button>
+            </div>
+
             <form id="chatForm" class="composer" autocomplete="off">
                 <button id="attachBtn" class="btn attach" type="button" aria-label="Send a picture"
                     title="Send a picture (you can also paste or drop one)" disabled>
@@ -143,18 +131,50 @@
                     </svg>
                 </button>
                 <input id="fileInput" type="file" accept="image/*" multiple hidden>
-                <input id="msgInput" class="field" type="text" aria-label="Message" placeholder="Message #general"
-                    maxlength="300" disabled>
+                <ul id="mentionList" class="mention-list" role="listbox" aria-label="Mention someone" hidden></ul>
+                <textarea id="msgInput" class="field" rows="1" aria-label="Message" placeholder="Message #general"
+                    title="Enter to send, Ctrl+Enter for a new line" maxlength="1000" disabled role="combobox"
+                    aria-autocomplete="list" aria-expanded="false" aria-controls="mentionList"></textarea>
                 <button id="sendBtn" class="btn" type="submit" disabled>Send</button>
             </form>
         </section>
 
-        <aside id="panel" class="panel" aria-label="People online">
-            <h2>Online (<span id="count">0</span>)</h2>
+        <aside id="panel" class="panel" aria-label="Members">
+            <h2>Members</h2>
+            <p class="panel-sub"><span id="count">0</span> online &middot; <span id="total">0</span> registered</p>
             <ul id="users"></ul>
         </aside>
 
         <div id="scrim" class="scrim"></div>
+    </div>
+
+    <!-- ===================== CONNECTION POPUP (hidden until the connection drops) ===================== -->
+    <div id="connToast" class="conn-toast" role="status" aria-live="polite" hidden>
+        <span class="conn-icon" aria-hidden="true"></span>
+        <span id="connText" class="conn-text"></span>
+    </div>
+
+    <!-- ===================== JOIN POPUPS ("<name> joined the chat", bottom right) ===================== -->
+    <div id="joinToasts" class="join-toasts" role="status" aria-live="polite"></div>
+
+    <!-- ===================== THOUGHT BUBBLE (floats left of a member while you hover it) ===================== -->
+    <div id="thoughtTip" class="thought-tip" role="tooltip" aria-hidden="true"></div>
+
+    <!-- ===================== PROFILE CARD (opens from your user card or from a member) ===================== -->
+    <div id="profileModal" class="prof-modal" hidden>
+        <section id="profileCard" class="prof-card" role="dialog" aria-modal="true" aria-label="Profile"></section>
+    </div>
+
+    <!-- ===================== ACCOUNT SETTINGS (username + password; separate from the profile card) ===================== -->
+    <div id="acctModal" class="prof-modal acct-modal" hidden>
+        <section id="acctCard" class="prof-card acct-card" role="dialog" aria-modal="true"
+            aria-label="Account settings"></section>
+    </div>
+
+    <!-- ===================== "ACCEPT THESE CHANGES?" (opens on top of the account settings) ===================== -->
+    <div id="acctConfirm" class="prof-modal acct-modal acct-confirm" hidden>
+        <section id="acctConfirmCard" class="prof-card acct-card acct-card-sm" role="alertdialog" aria-modal="true"
+            aria-label="Accept these changes?"></section>
     </div>
 
     <div id="lightbox" class="lightbox" hidden>
@@ -179,7 +199,23 @@
         <div id="consoleBody" class="console-body" role="log" inert></div>
     </aside>
 
-    <script src="app.js"></script>
+
+    <script>
+        const tag = String.raw`
+________ _____________________.___     _____ __________    _____      _____ __________ 
+\______ \\______   \_   _____/|   |   /  _  \\______   \  /     \    /  _  \\______   \
+ |    |  \|       _/|    __)_ |   |  /  /_\  \|    |  _/ /  \ /  \  /  /_\  \|    |  _/
+ |    |   \    |   \|        \|   | /    |    \    |   \/    Y    \/    |    \    |   \
+/_______  /____|_  /_______  /|___| \____|__  /______  /\____|__  /\____|__  /______  /
+        \/       \/        \/               \/       \/         \/         \/       \/
+`;
+
+        console.log(tag);
+        console.log("Drei Abmab Studios (c) || 2026")
+    </script>
+
+    <script src="/scripts/common.js"></script>
+    <script src="/scripts/chat.js"></script>
 </body>
 
 </html>
