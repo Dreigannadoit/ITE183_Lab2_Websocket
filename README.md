@@ -15,6 +15,7 @@ BISCORD lets people on the same network sign up, log in and chat in real time in
 - **Live messaging**: messages are broadcast to everyone through the WebSocket server (limit: 300 characters per message).
 - **Edit and delete your own messages**: hover over one of your messages (or look under it on a phone) to edit it or delete it. Edited messages show an "(edited)" note. Nobody else can edit or delete your messages: the server enforces it (see below).
 - **Reply to messages**: hover over any message (or look under it on a phone) and click the reply arrow. A "Replying to ..." bar appears above the message box (Esc or the cross cancels it). The sent message shows a small quote of the original; click the quote to jump to it. If the original was deleted, the quote says so. Replies are saved with the message (`messages.reply_to`, added automatically) and come back with the history. The server only keeps a reply if the original exists in the same channel.
+- **Text formatting**: bold, normal weight, italic, underline, strikethrough, highlight, font colour, `inline code`, multi-line code blocks, quotes and spoilers. Type the markers yourself or select text and use the toolbar / shortcuts (see *Text formatting* below).
 - **Chat history**: messages are saved in SQLite. The newest 100 messages per channel are loaded after login or a server restart.
 - **Picture sharing**: attach or drag-and-drop images (JPEG, PNG, GIF, WebP). They are compressed in the browser, sent in chunks, saved in the database and reloaded when they scroll into view.
 - **Typing indicator**: see who is typing in each channel.
@@ -78,6 +79,41 @@ The interface was designed in Figma before it was built. The screenshot below sh
 ![BISCORD Figma design file](docs/Figma_Design.png)
 
 
+### Text formatting
+
+Formatting is stored **inside the message text** as small markers, so the server and database are unchanged and older messages look exactly as before. The code is in `public/scripts/format.js` (parser, toolbar, shortcuts), the toolbar and preview sit above the message box in `public/chat.html`, and the styles are in the "TEXT FORMATTING" part at the end of `public/style.css`. Everything is built with `createElement` / `textContent`, never `innerHTML`, so a message cannot inject HTML or CSS.
+
+| Effect | Type this | Shortcut |
+| --- | --- | --- |
+| **Bold** | `**text**` | Ctrl+B |
+| Normal weight (lighter than the usual message text) | `[n]text[/n]` | toolbar **N** |
+| *Italic* | `*text*` or `_text_` | Ctrl+I |
+| Underline | `__text__` | Ctrl+U |
+| Strikethrough | `~~text~~` | Ctrl+Shift+X |
+| Highlight | `==text==` | Ctrl+Shift+H |
+| Font colour | `[c=red]text[/c]` (a name, or `#rgb` / `#rrggbb`) | toolbar **A** |
+| `Inline code` | `` `text` `` | Ctrl+E |
+| Code block | ```` ```js ```` + new line + code + ```` ``` ```` | toolbar **{ }** |
+| Quote | `> text` at the start of a line | toolbar **"** |
+| Spoiler (click to reveal) | `\|\|text\|\|` | toolbar |
+
+Colour names: red, orange, yellow, green, cyan, blue, purple, pink, white, black, gray.
+
+**Two ways to apply a format**
+
+1. **Type the markers** while writing. The *Preview* bubble above the toolbar shows how the message will look as soon as the draft contains formatting.
+2. **Select text, then use the toolbar or a shortcut.** The selection gets wrapped in the markers, and the same button/shortcut on the same selection takes them off again. With nothing selected, an empty pair is inserted and the caret lands between the markers. **Tx** clears all formatting from the selection.
+
+**Good to know**
+
+- Formats can be combined and nested: `**bold and _italic_**`, `[c=red]**red bold**[/c]`. Inside `` `code` `` and code blocks nothing else is formatted.
+- Put a backslash in front of a marker to show it literally: `\*not italic\*`.
+- Inside an unfinished ```` ``` ```` block, **Enter adds a new line** instead of sending, so you can type a whole code block without Ctrl+Enter. Type the closing ```` ``` ```` and Enter sends again.
+- The **Aa** button next to the picture button shows or hides the toolbar (remembered per browser). The toolbar also appears when you edit one of your messages.
+- The 1000 character limit counts the markers too. If the markers would not fit, the box shakes and nothing is changed.
+- Reply quotes and the "Replying to" bar show the plain words, without markers.
+- Bold uses font weight 1000 (Nunito Black), so `chat.html` now also loads Nunito weights 400 and 1000.
+
 ### Editing and deleting messages
 
 Every message gets an id when it is sent, and the id is saved with the message in the database (`messages.mid`, plus an `edited` flag). Edit and delete use that id.
@@ -140,6 +176,7 @@ Then it updates only the logged-in user's row of `users`. Messages, pictures and
 │   ├── style.css
 │   └── scripts/
 │       ├── common.js       # Shared WebSocket and packet helpers
+│       ├── format.js       # Text formatting: parser, toolbar and shortcuts
 │       ├── login.js
 │       └── chat.js
 └── database/

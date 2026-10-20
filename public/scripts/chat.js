@@ -696,6 +696,7 @@ function switchChannel(ch) {
     current = ch;
     msgInput.value = drafts[ch] || "";
     autoGrow(msgInput);
+    if (typeof updateFmtPreview === "function") updateFmtPreview();
     closeMentions();
     store[ch].unread = 0;
     store[ch].mentions = 0;
@@ -866,7 +867,7 @@ function makeMessage(item, grouped) {
 // The text of a message bubble (with a small "(edited)" note after an edit).
 function fillBubble(bubble, item) {
     bubble.replaceChildren();
-    appendText(bubble, item.text);
+    FX.render(bubble, item.text, appendText);   // **bold**, *italic*, `code`, ... (format.js); @names still become tags
 }
 
 // The small "(edited)" note sits under the bubble, not inside it.
@@ -947,7 +948,7 @@ const REPLY_SNIPPET = 90;
 function snippetOf(item) {
     if (!item) return "";
     if (item.kind === "img") return "Photo";
-    const t = (item.text || "").replace(/\s+/g, " ").trim();
+    const t = FX.strip(item.text || "").replace(/\s+/g, " ").trim();   // no ** or ` markers in the quote
     return t.length > REPLY_SNIPPET ? t.slice(0, REPLY_SNIPPET) + "\u2026" : t;
 }
 
@@ -1084,7 +1085,10 @@ function startEdit(item, bar) {
     const hint = document.createElement("small");
     hint.className = "edit-hint";
     hint.textContent = "Enter to save, Ctrl+Enter for a new line, Esc to cancel";
-    form.append(input, save, cancel, hint);
+    const tools = document.createElement("div");
+    tools.className = "fmt-bar fmt-bar-edit";
+    FX.mountToolbar(tools, input);
+    form.append(tools, input, save, cancel, hint);
 
     const close = () => { form.remove(); bubble.hidden = false; bar.hidden = false; };
     cancel.addEventListener("click", close);
@@ -1092,6 +1096,7 @@ function startEdit(item, bar) {
     input.addEventListener("keydown", (e) => {
         if (e.key === "Escape") { e.preventDefault(); close(); }
         else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) { e.preventDefault(); insertNewline(input); }
+        else if (e.key === "Enter" && !e.shiftKey && !e.isComposing && FX.inOpenFence(input)) { e.preventDefault(); insertNewline(input); }
         else if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
     });
     form.addEventListener("submit", (e) => {
@@ -1912,11 +1917,45 @@ $("chatForm").addEventListener("submit", (e) => {
         cancelReply();
         msgInput.value = "";
         autoGrow(msgInput);
+        updateFmtPreview();
         drafts[current] = "";
         cancelTyping();
     }
     msgInput.focus();
 });
+
+// ---------- text formatting (format.js) ----------
+// The toolbar (and Ctrl+B / Ctrl+I / Ctrl+U / Ctrl+E / Ctrl+Shift+X / Ctrl+Shift+H) wraps the selected text in markers,
+// or you can type the markers yourself. While the draft contains formatting, a small preview shows how it will look.
+const fmtBar = $("fmtBar"), fmtToggle = $("fmtToggle"), fmtPreview = $("fmtPreview");
+FX.mountToolbar(fmtBar, msgInput);
+
+var fmtReady = false;          // var: updateFmtPreview() can be called (channel switch) before this block has run
+function updateFmtPreview() {
+    if (!fmtReady) return;
+    const text = msgInput.value;
+    if (!text.trim() || fmtBar.hidden) { fmtPreview.hidden = true; return; }
+    const bubble = fmtPreview.querySelector(".bubble");
+    bubble.replaceChildren();
+    FX.render(bubble, text, appendText);
+    fmtPreview.hidden = !bubble.querySelector(".fx");        // nothing to preview when the text has no formatting
+}
+msgInput.addEventListener("input", updateFmtPreview);
+
+function setFmtBar(show) {
+    fmtBar.hidden = !show;
+    fmtToggle.setAttribute("aria-expanded", show ? "true" : "false");
+    fmtToggle.classList.toggle("on", show);
+    try { localStorage.setItem("biscord.fmtbar", show ? "1" : "0"); } catch (err) { /* private mode: not remembered */ }
+    updateFmtPreview();
+}
+fmtToggle.addEventListener("mousedown", (e) => e.preventDefault());
+fmtToggle.addEventListener("click", () => { setFmtBar(fmtBar.hidden); msgInput.focus(); });
+let fmtWanted = true;
+try { fmtWanted = localStorage.getItem("biscord.fmtbar") !== "0"; } catch (err) { /* default: shown */ }
+setFmtBar(fmtWanted);
+fmtReady = true;
+updateFmtPreview();
 
 // ---------- @mention suggestions ----------
 // Typing "@" in the message box opens a list of everybody with an account (online first, then offline).
@@ -2037,6 +2076,12 @@ msgInput.addEventListener("keyup", (e) => {
 msgInput.addEventListener("keydown", (e) => {
     // Ctrl+Enter (or Cmd+Enter) = new line. Browsers don't add one themselves, so we do.
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault();
+        insertNewline(msgInput);
+        return;
+    }
+    // Inside an unfinished ``` code block Enter adds a line, so a block can be typed without Ctrl+Enter on every line.
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && mentionList.hidden && FX.inOpenFence(msgInput)) {
         e.preventDefault();
         insertNewline(msgInput);
         return;

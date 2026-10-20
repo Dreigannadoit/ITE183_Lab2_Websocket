@@ -1891,3 +1891,200 @@ textarea#msgInput { flex: 1; min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
     .msg.flash .bubble { animation: none; outline: 4px solid var(--orange); }
 }
+
+
+/* ------------------------------------------------------------
+   TEXT FORMATTING (public/scripts/format.js)
+   Toolbar above the message box, live preview, and how formatted text looks inside a bubble.
+------------------------------------------------------------ */
+.fmt-bar {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 6px;
+    padding: 8px 16px;
+    background: var(--paper);
+    border-top: var(--line) solid var(--ink);
+}
+.fmt-bar[hidden], .fmt-preview[hidden] { display: none; }
+.fmt-bar:not([hidden]) + .composer { border-top-width: 0; }
+
+.fmt-btn {
+    position: relative;
+    min-width: 36px;
+    height: 34px;
+    padding: 0 8px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--ink);
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 10px;
+    box-shadow: 0 3px 0 var(--ink);
+    cursor: pointer;
+    transition: transform .08s, box-shadow .08s;
+}
+.fmt-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 0 var(--ink); background: var(--yellow); }
+.fmt-btn:active { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
+.fmt-btn:focus-visible, .fmt-swatch:focus-visible, .fmt-toggle:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+.fmt-btn.t-b { font-weight: 1000; }
+.fmt-btn.t-i { font-style: italic; font-family: Georgia, "Times New Roman", serif; font-weight: 700; font-size: 17px; }
+.fmt-btn.t-u { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.fmt-btn.t-s { text-decoration: line-through; text-decoration-thickness: 2px; }
+.fmt-btn.t-n { font-weight: 400; }
+.fmt-btn.t-mark { background: var(--yellow); }
+.fmt-btn.t-code { font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace; font-size: 13px; font-weight: 700; }
+.fmt-btn.t-q { font-family: Georgia, serif; font-size: 22px; padding-top: 6px; }
+.fmt-btn.t-clr { font-size: 13px; text-decoration: line-through; text-decoration-thickness: 2px; }
+.fmt-sep { width: 3px; height: 24px; margin: 0 4px; border-radius: 2px; background: rgba(27, 18, 48, .25); }
+
+.fmt-color { position: relative; display: inline-block; }
+.fmt-btn.t-color { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding-top: 2px; }
+.t-color-a { font-weight: 1000; font-size: 15px; line-height: 1; }
+.t-color-bar { width: 18px; height: 4px; border-radius: 2px; background: #FF3B4E; border: 1px solid var(--ink); }
+.fmt-pop {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    z-index: 40;
+    display: grid;
+    grid-template-columns: repeat(6, 28px);
+    gap: 8px;
+    padding: 10px;
+    background: var(--white);
+    border: 3px solid var(--ink);
+    border-radius: 14px;
+    box-shadow: 4px 4px 0 var(--ink);
+}
+.fmt-pop[hidden] { display: none; }
+.fmt-swatch { width: 28px; height: 28px; padding: 0; border: 3px solid var(--ink); border-radius: 50%; cursor: pointer; transition: transform .08s; }
+.fmt-swatch:hover { transform: scale(1.18); }
+.fmt-custom {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--ink);
+    border-radius: 50%;
+    background: conic-gradient(#FF3B4E, #FFD23F, #35D07F, #5CCBFF, #8B5CF6, #FF6FA5, #FF3B4E);
+    font-weight: 1000;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--ink);
+    cursor: pointer;
+}
+.fmt-custom span { text-shadow: 0 0 3px #fff, 0 0 3px #fff; pointer-events: none; }
+.fmt-custom input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+.btn.fmt-toggle { flex: none; padding: 6px 12px 8px; font-size: 18px; background: var(--white); }
+.btn.fmt-toggle.on { background: var(--yellow); }
+
+/* the preview: your draft the way it will look once it is sent */
+.fmt-preview {
+    flex: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 16px 10px;
+    background: var(--paper);
+    border-top: var(--line) solid var(--ink);
+}
+.fmt-preview-lbl { flex: none; padding-top: 6px; font-family: var(--display); font-size: 14px; letter-spacing: .4px; color: #5b5273; }
+.fmt-preview .bubble { max-height: 150px; overflow: auto; color: var(--white); background: var(--blue); border-radius: 18px 18px 6px 18px; box-shadow: 3px 3px 0 var(--ink); }
+
+/* the toolbar inside the "edit message" box */
+.fmt-bar-edit { flex-basis: 100%; padding: 0; background: transparent; border-top: 0; }
+.msg.mine .fmt-bar-edit { justify-content: flex-end; }
+.fmt-bar-edit .fmt-pop { bottom: auto; top: calc(100% + 8px); }
+
+.fx-full { animation: fxShake .3s; }
+@keyframes fxShake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@media (prefers-reduced-motion: reduce) { .fx-full { animation: none; outline: 3px solid var(--orange); } }
+
+@media (max-width: 480px) {
+    .fmt-bar { padding: 8px 10px; gap: 8px 4px; }
+    .fmt-btn { min-width: 32px; padding: 0 6px; }
+    .fmt-preview { padding: 8px 10px; }
+}
+
+/* ----- formatted text inside a message ----- */
+.bubble .fx-b { font-weight: 1000; }
+.bubble .fx-n { font-weight: 400; }
+.bubble .fx-i { font-style: italic; }
+.bubble .fx-u { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.bubble .fx-s { text-decoration: line-through; text-decoration-thickness: 2px; }
+.bubble .fx-mark {
+    padding: 0 4px;
+    color: var(--ink);
+    background: var(--yellow);
+    border-radius: 5px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+/* coloured text gets an ink outline (like the rest of the app) so every colour reads on white and on blue */
+.bubble .fx-color {
+    text-shadow: 1px 1px 0 var(--ink), -1px -1px 0 var(--ink), 1px -1px 0 var(--ink), -1px 1px 0 var(--ink),
+        0 1px 0 var(--ink), 0 -1px 0 var(--ink), 1px 0 0 var(--ink), -1px 0 0 var(--ink);
+}
+.bubble .fx-code {
+    padding: 1px 6px 2px;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+    font-size: .9em;
+    font-weight: 700;
+    color: var(--ink);
+    background: #EEE8D8;
+    border: 2px solid var(--ink);
+    border-radius: 7px;
+}
+.msg.mine .bubble .fx-code, .fmt-preview .bubble .fx-code { color: var(--yellow); background: var(--ink); }
+.bubble .fx-pre {
+    display: block;
+    max-width: 100%;
+    margin: 6px 0 2px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-wrap: normal;
+    color: #F4F1FF;
+    background: var(--ink);
+    border-radius: 12px;
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .15);
+}
+.bubble .fx-pre[data-lang]::before {
+    content: attr(data-lang);
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .8px;
+    text-transform: uppercase;
+    color: var(--yellow);
+}
+.bubble .fx-pre code { padding: 0; font: inherit; color: inherit; background: none; border: 0; }
+.bubble .fx-quote {
+    display: block;
+    margin: 4px 0;
+    padding: 2px 0 2px 10px;
+    border-left: 4px solid var(--orange);
+    border-radius: 2px;
+}
+.bubble .fx-spoiler {
+    padding: 0 3px;
+    border-radius: 5px;
+    cursor: pointer;
+    background: var(--ink);
+    color: transparent;
+    user-select: none;
+    transition: background .15s;
+}
+.bubble .fx-spoiler:not(.open) * { color: transparent; text-shadow: none; background: none; border-color: transparent; }
+.bubble .fx-spoiler.open { cursor: pointer; background: rgba(27, 18, 48, .18); color: inherit; user-select: auto; }
+.msg.mine .bubble .fx-spoiler.open, .fmt-preview .bubble .fx-spoiler.open { background: rgba(255, 255, 255, .25); }

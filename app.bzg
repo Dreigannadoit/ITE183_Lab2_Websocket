@@ -1416,6 +1416,9 @@ server.get = function (path, data){
     else if(path == "/scripts/login.js"){
         server.sendFile("public/scripts/login.js");
     }
+    else if(path == "/scripts/format.js"){
+        server.sendFile("public/scripts/format.js");
+    }
     else if(path == "/scripts/chat.js"){
         server.sendFile("public/scripts/chat.js");
     }

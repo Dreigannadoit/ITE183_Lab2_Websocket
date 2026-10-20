@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&family=Poppins:wght@400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;800;1000&family=Poppins:wght@400;500;600;700&display=swap"
         rel="stylesheet">
 
     <link rel="stylesheet" href="style.css">
@@ -119,6 +119,13 @@
                 <button id="replyCancel" class="act-btn" type="button" aria-label="Cancel reply" title="Cancel reply (Esc)">&#10005;</button>
             </div>
 
+            <!-- text formatting: the toolbar applies markers to the selected text (format.js); the preview shows the result -->
+            <div id="fmtPreview" class="fmt-preview" hidden>
+                <span class="fmt-preview-lbl">Preview</span>
+                <div class="bubble"></div>
+            </div>
+            <div id="fmtBar" class="fmt-bar"></div>
+
             <form id="chatForm" class="composer" autocomplete="off">
                 <button id="attachBtn" class="btn attach" type="button" aria-label="Send a picture"
                     title="Send a picture (you can also paste or drop one)" disabled>
@@ -130,6 +137,8 @@
                             stroke-linejoin="round" />
                     </svg>
                 </button>
+                <button id="fmtToggle" class="btn fmt-toggle" type="button" aria-label="Text formatting"
+                    aria-expanded="true" title="Show or hide the text formatting toolbar">Aa</button>
                 <input id="fileInput" type="file" accept="image/*" multiple hidden>
                 <ul id="mentionList" class="mention-list" role="listbox" aria-label="Mention someone" hidden></ul>
                 <textarea id="msgInput" class="field" rows="1" aria-label="Message" placeholder="Message #general"
@@ -215,6 +224,7 @@ ________ _____________________.___     _____ __________    _____      _____ ____
     </script>
 
     <script src="/scripts/common.js"></script>
+    <script src="/scripts/format.js"></script>
     <script src="/scripts/chat.js"></script>
 </body>
 
