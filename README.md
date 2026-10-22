@@ -54,6 +54,7 @@ Anything else is treated as live chat and broadcast to all connected clients. Th
 
 ### Schematic diagram
 
+
 ![BISCORD schematic diagram](docs/Schematic_Diagram.jpg)
 
 The diagram shows how the pieces fit together:
