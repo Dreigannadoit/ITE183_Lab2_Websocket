@@ -36,6 +36,8 @@ function newSecret() {
     return Array.from(bytes, (b) => (b < 16 ? "0" : "") + b.toString(16)).join("");
 }
 
+
+
 function loadSession() {
     try {
         const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
